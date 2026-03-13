@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ClareDimensions</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
         :root {
             --bg-color: #0f0f1a;
@@ -14,51 +15,34 @@
             --accent: #a29bfe;
             --green: #2ed573;
         }
-
         * { margin: 0; padding: 0; box-sizing: border-box; }
-
         body {
             font-family: 'Courier New', monospace;
             background: var(--bg-color);
             color: var(--text-white);
-            height: 100vh;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
+            height: 100vh; overflow: hidden;
+            display: flex; flex-direction: column;
         }
-
-        /* ── TOP BAR ── */
         #top-bar {
             padding: 6px 12px;
-            background: rgba(26, 26, 45, 0.97);
+            background: rgba(26,26,45,0.97);
             border-bottom: 2px solid var(--primary);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 8px;
-            z-index: 100;
-            flex-shrink: 0;
+            display: flex; align-items: center; justify-content: space-between;
+            gap: 8px; z-index: 100; flex-shrink: 0;
         }
-
         .bar-left { display: flex; align-items: center; gap: 6px; }
         .site-title { font-size: 13px; font-weight: bold; color: var(--primary); letter-spacing: 0.05em; }
         .sep { color: #444; font-size: 12px; }
-
         .player-tag {
             font-size: 11px; color: var(--accent);
-            padding: 3px 8px;
-            background: #1a1a2d;
-            border: 1px solid var(--primary);
-            border-radius: 4px;
+            padding: 3px 8px; background: #1a1a2d;
+            border: 1px solid var(--primary); border-radius: 4px;
             display: flex; align-items: center; gap: 5px;
         }
-
         .pfp-mini {
             width: 16px; height: 16px; border-radius: 3px;
-            object-fit: cover; border: 1px solid var(--primary);
-            flex-shrink: 0;
+            object-fit: cover; border: 1px solid var(--primary); flex-shrink: 0;
         }
-
         .icon-btn {
             background: #2f3542; color: white; border: none;
             border-radius: 4px; padding: 4px 10px; font-size: 11px;
@@ -67,34 +51,28 @@
         }
         .icon-btn:hover  { background: #3d4555; }
         .icon-btn:active { transform: scale(0.92); }
-        .icon-btn.danger { background: var(--danger); }
 
-        /* ── CANVAS ── */
-        #c { flex: 1; display: block; width: 100%; cursor: crosshair; }
+        #c {
+            flex: 1; display: block; width: 100%;
+            cursor: crosshair; position: relative; overflow: hidden;
+        }
+        #c canvas { position: absolute; inset: 0; width: 100% !important; height: 100% !important; }
 
         /* ── JOIN SCREEN ── */
         #join-screen {
-            position: fixed; inset: 0;
-            background: rgba(0,0,0,0.92);
-            z-index: 200;
-            display: flex; align-items: center; justify-content: center;
+            position: fixed; inset: 0; background: rgba(0,0,0,0.92);
+            z-index: 200; display: flex; align-items: center; justify-content: center;
             backdrop-filter: blur(6px);
         }
         #join-screen.hidden { display: none !important; }
-
         .join-box {
             background: var(--chat-bg); padding: 28px; border-radius: 14px;
             width: 300px; text-align: center;
             border: 1px solid var(--primary);
             box-shadow: 0 0 28px rgba(72,52,212,0.35);
         }
-
         .join-box h2 { color: var(--primary); font-size: 24px; margin: 0 0 15px 0; }
-
-        .join-subtitle {
-            color: #888; font-size: 11px; margin-top: 15px; cursor: pointer;
-        }
-
+        .join-subtitle { color: #888; font-size: 11px; margin-top: 15px; cursor: pointer; }
         .join-box input {
             width: 100%; background: #0f0f1a; border: 1px solid #333;
             color: white; border-radius: 8px; padding: 10px;
@@ -102,7 +80,6 @@
             margin-bottom: 10px; box-sizing: border-box;
         }
         .join-box input:focus { border-color: var(--primary); }
-
         .join-box button {
             width: 100%; padding: 12px; background: var(--primary);
             border: none; border-radius: 8px; color: white; font-weight: bold;
@@ -112,10 +89,6 @@
         .join-box button:hover  { background: #5a43e8; }
         .join-box button:active { transform: scale(0.97); }
         .join-box button:disabled { background: #333; color: #666; cursor: not-allowed; }
-
-        /* color picker — shown for guest mode */
-        .color-section { display: none; }
-        .color-section.visible { display: block; }
         .color-row { display: flex; gap: 8px; justify-content: center; margin: 10px 0 4px; }
         .cswatch {
             width: 22px; height: 22px; border-radius: 4px; cursor: pointer;
@@ -124,102 +97,93 @@
         .cswatch:hover  { transform: scale(1.2); }
         .cswatch.active { border-color: white; }
         .color-label { font-size: 10px; color: #666; margin-bottom: 2px; }
-
-        /* divider */
-        .or-row {
-            display: flex; align-items: center; gap: 8px;
-            margin: 12px 0; color: #444; font-size: 10px;
-        }
-        .or-row hr { flex: 1; border: none; border-top: 1px solid #333; }
-
-        /* error message */
-        #login-err {
-            color: var(--danger); font-size: 10px; min-height: 14px;
-            margin-bottom: 6px; display: none;
-        }
-
-        /* loading spinner */
-        #login-spin {
-            display: none; color: var(--accent); font-size: 10px; margin-bottom: 6px;
-        }
-
-        /* success badge shown after CC login */
+        #login-err { color: var(--danger); font-size: 10px; min-height: 14px; margin-bottom: 6px; display: none; }
+        #login-spin { display: none; color: var(--accent); font-size: 10px; margin-bottom: 6px; }
         #cc-badge {
-            display: none;
-            background: #0f0f1a;
-            border: 1px solid var(--green);
-            border-radius: 8px;
-            padding: 10px;
-            margin-bottom: 12px;
-            text-align: left;
-            font-size: 11px;
+            display: none; background: #0f0f1a; border: 1px solid var(--green);
+            border-radius: 8px; padding: 10px; margin-bottom: 12px;
+            text-align: left; font-size: 11px;
         }
-        #cc-badge img {
-            width: 36px; height: 36px; border-radius: 6px;
-            object-fit: cover; border: 1px solid var(--primary);
-            float: left; margin-right: 10px;
-        }
+        #cc-badge img { width: 36px; height: 36px; border-radius: 6px; object-fit: cover; border: 1px solid var(--primary); float: left; margin-right: 10px; }
         #cc-badge .cc-name { color: var(--green); font-weight: bold; }
         #cc-badge .cc-status { color: #666; font-size: 10px; }
 
-        /* ── CROSSHAIR ── */
+        /* ── OVERLAYS ── */
         #crosshair {
             position: fixed; top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
+            transform: translate(-50%,-50%);
             pointer-events: none; z-index: 50;
             color: rgba(255,255,255,0.65); font-size: 18px; line-height: 1;
             display: none;
         }
-
-        /* ── HINT ── */
         #hint {
             position: fixed; bottom: 10px; left: 50%;
             transform: translateX(-50%);
             font-size: 10px; color: #3a3a4a;
-            pointer-events: none; z-index: 50; letter-spacing: 0.05em;
-            display: none;
+            pointer-events: none; z-index: 50; letter-spacing: 0.05em; display: none;
         }
-
-        /* ── LOCK PROMPT ── */
         #lock-prompt {
             position: fixed; top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
+            transform: translate(-50%,-50%);
             font-size: 12px; color: #555;
             pointer-events: none; z-index: 50;
-            text-align: center; line-height: 1.8;
-            display: none;
+            text-align: center; line-height: 1.8; display: none;
+        }
+        #dim-label {
+            position: fixed; top: 44px; left: 50%;
+            transform: translateX(-50%);
+            font-size: 11px; color: var(--accent);
+            background: rgba(15,15,26,0.85); border: 1px solid var(--primary);
+            padding: 2px 10px; border-radius: 4px;
+            pointer-events: none; z-index: 50; display: none;
+            letter-spacing: 0.05em;
+        }
+        #portal-prompt {
+            position: fixed; bottom: 26px; left: 50%;
+            transform: translateX(-50%);
+            font-size: 11px; color: #a29bfe;
+            background: rgba(15,15,26,0.9); border: 1px solid var(--primary);
+            padding: 4px 14px; border-radius: 6px;
+            pointer-events: none; z-index: 50; display: none;
+        }
+        #gen-btn {
+            position: fixed; bottom: 10px; right: 14px;
+            font-size: 11px; z-index: 60; display: none;
+            background: var(--green); color: #000; border: none;
+            border-radius: 6px; padding: 5px 12px; cursor: pointer;
+            font-family: inherit; font-weight: bold;
+        }
+        #pet-notif {
+            position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%, -120px);
+            font-size: 13px; color: white;
+            background: rgba(15,15,26,0.9); border: 1px solid var(--green);
+            padding: 6px 16px; border-radius: 8px;
+            pointer-events: none; z-index: 60; display: none;
         }
 
-        /* admin tag rainbow */
         @keyframes rainbow {
-            0%   { color: #ff4757; } 20% { color: #ffa502; }
-            40%  { color: #eccc68; } 60% { color: #2ed573; }
-            80%  { color: #1e90ff; } 100%{ color: #ff4757; }
+            0%{color:#ff4757}20%{color:#ffa502}40%{color:#eccc68}
+            60%{color:#2ed573}80%{color:#1e90ff}100%{color:#ff4757}
         }
         .admin-tag { animation: rainbow 3s linear infinite; font-size: 9px; margin-left: 2px; font-weight: bold; }
     </style>
 </head>
 <body>
 
-<!-- JOIN SCREEN -->
+<!-- JOIN SCREEN — identical to ClareCool login -->
 <div id="join-screen">
     <div class="join-box">
         <h2 id="auth-header">ClareDimensions</h2>
-
         <div id="cc-badge"></div>
         <div id="login-spin">⏳ Verifying...</div>
         <div id="login-err"></div>
-
         <input type="text"     id="cc-user" placeholder="Username"
                onkeypress="if(event.key==='Enter') document.getElementById('cc-pass').focus()">
         <input type="password" id="cc-pass" placeholder="Password"
                onkeypress="if(event.key==='Enter') ccLogin()">
-
         <button id="cc-btn" onclick="ccLogin()">Login</button>
-
         <p class="join-subtitle" onclick="toggleSignUp()" id="toggle-auth-text">New here? Sign Up</p>
-
-        <!-- Sign-up section (hidden by default) -->
         <div id="signup-section" style="display:none; margin-top:4px;">
             <input type="text"     id="su-user" placeholder="Username" maxlength="16"
                    onkeypress="if(event.key==='Enter') document.getElementById('su-pass').focus()">
@@ -227,8 +191,6 @@
                    onkeypress="if(event.key==='Enter') ccSignUp()">
             <button onclick="ccSignUp()">Sign Up</button>
         </div>
-
-        <!-- hidden color row still needed for JS -->
         <div id="color-row" style="display:none;"></div>
     </div>
 </div>
@@ -236,7 +198,7 @@
 <!-- TOP BAR -->
 <div id="top-bar">
     <div class="bar-left">
-        <span class="site-title">🧱 Baseplate</span>
+        <span class="site-title">🧱 ClareDimensions</span>
         <span class="sep">|</span>
         <span class="player-tag" id="player-label">
             <img id="pfp-mini" class="pfp-mini" src="https://via.placeholder.com/16" style="display:none;">
@@ -249,130 +211,100 @@
     <button class="icon-btn" onclick="leaveGame()">Leave</button>
 </div>
 
-<!-- CANVAS -->
-<canvas id="c"></canvas>
+<div id="c"></div>
 
-<!-- UI overlays (hidden until in game) -->
+<!-- OVERLAYS -->
 <div id="crosshair">+</div>
 <div id="lock-prompt">Click to look around</div>
 <div id="hint">WASD · MOVE &nbsp;|&nbsp; MOUSE · LOOK &nbsp;|&nbsp; CLICK · LOCK</div>
+<div id="dim-label">HUB</div>
+<div id="portal-prompt"></div>
+<button id="gen-btn" onclick="generateGrasslands()">🌿 Generate All</button>
+<div id="pet-notif"></div>
 
-<!-- Two Firebase apps: ClareCool (verify) + Baseplate (game) -->
 <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-database-compat.js"></script>
 
 <script>
-// ── FIREBASE: ClareCool (read-only for auth) ──────────────────
+// ════════════════════════════════════════════════
+// FIREBASE
+// ════════════════════════════════════════════════
 const ccApp = firebase.initializeApp({
-    apiKey:            "AIzaSyB9Rlvq49-AiLBzMDvjz71QCTT4d6NqE98",
-    authDomain:        "mychat-28205.firebaseapp.com",
-    databaseURL:       "https://mychat-28205-default-rtdb.firebaseio.com",
-    projectId:         "mychat-28205",
-    storageBucket:     "mychat-28205.firebasestorage.app",
-    messagingSenderId: "522121848657",
-    appId:             "1:522121848657:web:7108993439310bf6da5570"
+    apiKey:"AIzaSyB9Rlvq49-AiLBzMDvjz71QCTT4d6NqE98",
+    authDomain:"mychat-28205.firebaseapp.com",
+    databaseURL:"https://mychat-28205-default-rtdb.firebaseio.com",
+    projectId:"mychat-28205",
+    storageBucket:"mychat-28205.firebasestorage.app",
+    messagingSenderId:"522121848657",
+    appId:"1:522121848657:web:7108993439310bf6da5570"
 }, "clarecool");
-
 const ccDB = ccApp.database();
 
-// ── FIREBASE: Baseplate (game state) ─────────────────────────
 const bpApp = firebase.initializeApp({
-    apiKey:            "AIzaSyBiCQBzaMtlKu1pUMpNYyCn2wesSci38Hk",
-    authDomain:        "thisisafirebase.firebaseapp.com",
-    databaseURL:       "https://thisisafirebase-default-rtdb.firebaseio.com",
-    projectId:         "thisisafirebase",
-    storageBucket:     "thisisafirebase.firebasestorage.app",
-    messagingSenderId: "869597817002",
-    appId:             "1:869597817002:web:375cb498243ebcfc9f08d3",
-    measurementId:     "G-72PYPCYPRW"
+    apiKey:"AIzaSyBiCQBzaMtlKu1pUMpNYyCn2wesSci38Hk",
+    authDomain:"thisisafirebase.firebaseapp.com",
+    databaseURL:"https://thisisafirebase-default-rtdb.firebaseio.com",
+    projectId:"thisisafirebase",
+    storageBucket:"thisisafirebase.firebasestorage.app",
+    messagingSenderId:"869597817002",
+    appId:"1:869597817002:web:375cb498243ebcfc9f08d3",
+    measurementId:"G-72PYPCYPRW"
 }, "baseplate");
-
 const db = bpApp.database();
 
-// ── CONSTANTS ────────────────────────────────────────────────
-const GRID_W   = 60;
-const GRID_D   = 60;
-const CELL     = 40;
-const PLAYER_H = 28;
-const SPEED    = 3.2;
-const FOV      = Math.PI / 2.8;
+// ════════════════════════════════════════════════
+// CONSTANTS
+// ════════════════════════════════════════════════
+const CC_ADMINS      = ["44","bboy2014","bartelsfamily5","hunter"];
+const FALLBACK_COLORS = ['#4834d4','#2ed573','#eb4d4b','#ffa502','#a29bfe','#00cec9','#fdcb6e','#e84393'];
+const SPEED          = 180;   // world units per second
+const EYE_H          = 55;    // camera eye height
+const HUB_R          = 400;   // hub radius
+const G_SIZE         = 3000;  // grasslands half-size
 
-const CC_ADMINS = ["44", "bboy2014", "bartelsfamily5", "hunter"];
-
-// Map ClareCool status → baseplate color
-const STATUS_COLOR_MAP = {
-    'Active':  '#4834d4',
-    'default': '#4834d4'
-};
-const FALLBACK_COLORS = [
-    '#4834d4','#2ed573','#eb4d4b','#ffa502',
-    '#a29bfe','#00cec9','#fdcb6e','#e84393'
-];
-
-// ── STATE ────────────────────────────────────────────────────
-let myId     = null, myName = '', myColor = '#4834d4';
-let myRef    = null, myPfp  = '';
-let isAdmin  = false;
+// ════════════════════════════════════════════════
+// STATE
+// ════════════════════════════════════════════════
+let myId = null, myName = '', myColor = '#4834d4', myPfp = '', isAdmin = false, myRef = null;
 let otherPlayers = {};
-
-let pos   = { x: 0, z: 0 };
+let pos   = { x: 0, y: 0, z: 0 };
 let yaw   = 0, pitch = 0;
 let keys  = {}, locked = false, lastPush = 0;
+let currentDim = 'hub'; // 'hub' | 'grasslands'
 
-// ── GUEST COLOR PICKER ───────────────────────────────────────
+// Three.js globals
+const wrap = document.getElementById('c');
+let renderer, clock3;
+let activeScene, activeCamera;
+const playerMeshes = {}, nameTags = {};
+
+// ════════════════════════════════════════════════
+// AUTH — identical to ClareCool
+// ════════════════════════════════════════════════
 let chosenColor = FALLBACK_COLORS[0];
-const colorRow = document.getElementById('color-row');
-FALLBACK_COLORS.forEach((c, i) => {
-    const s = document.createElement('div');
-    s.className = 'cswatch' + (i === 0 ? ' active' : '');
-    s.style.background = c;
-    s.onclick = () => {
-        chosenColor = c;
-        document.querySelectorAll('.cswatch').forEach(x => x.classList.remove('active'));
-        s.classList.add('active');
-    };
-    colorRow.appendChild(s);
-});
+document.getElementById('color-row');
 
-// ── CLARECOOL LOGIN ───────────────────────────────────────────
 async function ccLogin() {
     const u = document.getElementById('cc-user').value.trim().toLowerCase();
     const p = document.getElementById('cc-pass').value.trim();
     if (!u || !p) { showErr('Enter username and password.'); return; }
-
     setLoading(true);
     try {
         const snap = await ccDB.ref('users/' + u).once('value');
         if (!snap.exists()) { setLoading(false); showErr('User not found.'); return; }
-
         const data = snap.val();
         if (data.password !== p) { setLoading(false); showErr('Wrong password.'); return; }
         if (data.banned)         { setLoading(false); showErr('This account is banned on ClareCool.'); return; }
-
         setLoading(false);
-
-        // Pull ClareCool profile
-        const pfpUrl   = data.pfp    || '';
-        const status   = data.status || 'Active';
+        const pfpUrl = data.pfp || '', status = data.status || 'Active';
         const adminTag = CC_ADMINS.includes(u);
-
-        // Pick color: admin gets gold, otherwise purple (ClareCool primary)
         const color = adminTag ? '#ffa502' : '#4834d4';
-
-        // Show badge
         showBadge(u, pfpUrl, status, adminTag);
-
-        // Hide login inputs, show enter button
         document.getElementById('cc-user').style.display = 'none';
         document.getElementById('cc-pass').style.display = 'none';
         document.getElementById('cc-btn').innerText = '▶ Play';
         document.getElementById('cc-btn').onclick = () => launchGame(u, color, pfpUrl, adminTag);
-
-    } catch(e) {
-        setLoading(false);
-        showErr('Connection error. Try again.');
-        console.error(e);
-    }
+    } catch(e) { setLoading(false); showErr('Connection error.'); }
 }
 
 function showBadge(username, pfp, status, isAdm) {
@@ -381,17 +313,15 @@ function showBadge(username, pfp, status, isAdm) {
     badge.innerHTML = `
         ${pfp ? `<img src="${pfp}" onerror="this.style.display='none'">` : ''}
         <div style="overflow:hidden;">
-            <div class="cc-name">${username}${isAdm ? ' <span style="color:#ffa502; font-size:9px;">[ADM]</span>' : ''}</div>
+            <div class="cc-name">${username}${isAdm?' <span style="color:#ffa502;font-size:9px;">[ADM]</span>':''}</div>
             <div class="cc-status">"${status}"</div>
-            <div style="color:#2ed573; font-size:9px; margin-top:2px;">✓ ClareCool verified</div>
-        </div>
-        <div style="clear:both;"></div>
-    `;
+            <div style="color:#2ed573;font-size:9px;margin-top:2px;">✓ ClareCool verified</div>
+        </div><div style="clear:both;"></div>`;
 }
 
 function toggleSignUp() {
-    const ss  = document.getElementById('signup-section');
-    const tt  = document.getElementById('toggle-auth-text');
+    const ss = document.getElementById('signup-section');
+    const tt = document.getElementById('toggle-auth-text');
     const hdr = document.getElementById('auth-header');
     const open = ss.style.display === 'none';
     ss.style.display = open ? 'block' : 'none';
@@ -403,312 +333,876 @@ async function ccSignUp() {
     const u = document.getElementById('su-user').value.trim().toLowerCase();
     const p = document.getElementById('su-pass').value.trim();
     if (!u || !p) { showErr('Fill in both fields.'); return; }
-
-    const illegalChars = /[ \(\)\[\]\{\}\<\>\/\\|]/;
-    if (illegalChars.test(u)) { showErr('No spaces or brackets allowed.'); return; }
-
+    if (/[ \(\)\[\]\{\}\<\>\/\\|]/.test(u)) { showErr('No spaces or brackets allowed.'); return; }
     setLoading(true);
     try {
         const snap = await ccDB.ref('users/' + u).once('value');
         if (snap.exists()) { setLoading(false); showErr('Username already taken.'); return; }
-
         await ccDB.ref('users/' + u).set({ password: p, pfp: '', status: 'Active', warned: false, banned: false });
         setLoading(false);
-
-        // Auto-login after sign up
         showBadge(u, '', 'Active', false);
         document.getElementById('signup-section').style.display = 'none';
         document.getElementById('toggle-auth-text').style.display = 'none';
         document.getElementById('cc-btn').innerText = '▶ Play';
         document.getElementById('cc-btn').onclick = () => launchGame(u, '#4834d4', '', false);
         document.getElementById('cc-btn').style.display = 'block';
-
-    } catch(e) {
-        setLoading(false);
-        showErr('Connection error. Try again.');
-        console.error(e);
-    }
+    } catch(e) { setLoading(false); showErr('Connection error.'); }
 }
 
 function showErr(msg) {
     const el = document.getElementById('login-err');
-    el.innerText  = msg;
-    el.style.display = 'block';
+    el.innerText = msg; el.style.display = 'block';
     setTimeout(() => el.style.display = 'none', 3000);
 }
-
 function setLoading(on) {
     document.getElementById('login-spin').style.display = on ? 'block' : 'none';
     document.getElementById('cc-btn').disabled = on;
 }
 
-// ── LAUNCH ───────────────────────────────────────────────────
+// ════════════════════════════════════════════════
+// LAUNCH
+// ════════════════════════════════════════════════
 function launchGame(username, color, pfp, adminFlag) {
-    myName  = username;
-    myColor = color;
-    myPfp   = pfp;
-    isAdmin = adminFlag;
-
-    // Update top bar
+    myName = username; myColor = color; myPfp = pfp; isAdmin = adminFlag;
     document.getElementById('player-name').innerText = myName;
     if (pfp) {
         const mini = document.getElementById('pfp-mini');
-        mini.src          = pfp;
-        mini.style.display = 'inline-block';
-        mini.onerror      = () => mini.style.display = 'none';
+        mini.src = pfp; mini.style.display = 'inline-block';
+        mini.onerror = () => mini.style.display = 'none';
     }
     if (isAdmin) document.getElementById('adm-tag').style.display = 'inline';
-
-    // Show overlays
     document.getElementById('crosshair').style.display  = 'block';
     document.getElementById('lock-prompt').style.display = 'block';
     document.getElementById('hint').style.display        = 'block';
+    document.getElementById('dim-label').style.display   = 'block';
 
-    // Spawn position
-    pos.x = (Math.random() - 0.5) * GRID_W * CELL * 0.4;
-    pos.z = (Math.random() - 0.5) * GRID_D * CELL * 0.4;
+    pos.x = 0; pos.y = 0; pos.z = 0;
 
-    // Register in Baseplate DB
-    myRef = db.ref('baseplate_players').push();
+    myRef = db.ref('cd_players').push();
     myId  = myRef.key;
-    myRef.set({
-        name:    myName,
-        color:   myColor,
-        pfp:     myPfp,
-        isAdmin: isAdmin,
-        x:       pos.x,
-        z:       pos.z,
-        yaw:     0
-    });
+    myRef.set({ name: myName, color: myColor, pfp: myPfp, isAdmin, x: 0, y: 0, z: 0, yaw: 0, dim: 'hub' });
     myRef.onDisconnect().remove();
 
-    // Listen to others
-    db.ref('baseplate_players').on('value', snap => {
+    db.ref('cd_players').on('value', snap => {
         otherPlayers = {};
-        snap.forEach(child => {
-            if (child.key !== myId) otherPlayers[child.key] = child.val();
-        });
-        document.getElementById('online-label').innerText =
-            (Object.keys(otherPlayers).length + 1) + ' online';
+        snap.forEach(child => { if (child.key !== myId) otherPlayers[child.key] = child.val(); });
+        document.getElementById('online-label').innerText = (Object.keys(otherPlayers).length + 1) + ' online';
     });
 
     document.getElementById('join-screen').classList.add('hidden');
+    initRenderer();
+    enterHub();
     loop();
 }
 
-function leaveGame() {
-    if (myRef) myRef.remove();
-    location.reload();
+function leaveGame() { if (myRef) myRef.remove(); location.reload(); }
+
+// ════════════════════════════════════════════════
+// RENDERER — shared single WebGL renderer
+// ════════════════════════════════════════════════
+function initRenderer() {
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.setClearColor(0x08080f);
+    wrap.appendChild(renderer.domElement);
+
+    window.addEventListener('resize', () => {
+        renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+        if (activeCamera) { activeCamera.aspect = wrap.clientWidth / wrap.clientHeight; activeCamera.updateProjectionMatrix(); }
+    });
+
+    wrap.addEventListener('click', () => { if (myId) wrap.requestPointerLock(); });
+    document.addEventListener('pointerlockchange', () => {
+        locked = document.pointerLockElement === wrap;
+        document.getElementById('lock-prompt').style.display = (myId && !locked) ? 'block' : 'none';
+    });
+
+    clock3 = new THREE.Clock();
+    document.addEventListener('keydown', e => { keys[e.code] = true; if(e.code==='Space') e.preventDefault(); });
+    document.addEventListener('keyup',   e => { keys[e.code] = false; });
+    document.addEventListener('mousemove', e => {
+        if (!locked) return;
+        yaw   += e.movementX * 0.002;
+        pitch -= e.movementY * 0.002;
+        pitch  = Math.max(-1.0, Math.min(0.9, pitch));
+    });
 }
 
-// ── CANVAS ───────────────────────────────────────────────────
-const canvas = document.getElementById('c');
-const ctx    = canvas.getContext('2d');
-function resize() { canvas.width = canvas.clientWidth; canvas.height = canvas.clientHeight; }
-resize();
-window.addEventListener('resize', resize);
+function makeCamera() {
+    const cam = new THREE.PerspectiveCamera(75, wrap.clientWidth / wrap.clientHeight, 1, 12000);
+    cam.rotation.order = 'YXZ';
+    return cam;
+}
 
-// ── CONTROLS ────────────────────────────────────────────────
-document.addEventListener('keydown', e => { keys[e.code] = true; if(e.code==='Space') e.preventDefault(); });
-document.addEventListener('keyup',   e => { keys[e.code] = false; });
+// ════════════════════════════════════════════════
+// PLAYER MESH (square character)
+// ════════════════════════════════════════════════
+function makeSquareMesh(hexColor) {
+    const g   = new THREE.Group();
+    const mat = new THREE.MeshLambertMaterial({ color: hexColor });
+    const body = new THREE.Mesh(new THREE.BoxGeometry(22, 30, 22), mat);
+    body.position.y = 15; body.castShadow = true;
+    const head = new THREE.Mesh(new THREE.BoxGeometry(20, 20, 20), mat);
+    head.position.y = 42; head.castShadow = true;
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+    [-5, 5].forEach(ex => {
+        const eye = new THREE.Mesh(new THREE.BoxGeometry(4, 4, 3), eyeMat);
+        eye.position.set(ex, 44, -11); g.add(eye);
+    });
+    [body, head].forEach(m => {
+        const e = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry), new THREE.LineBasicMaterial({ color: hexColor }));
+        e.position.copy(m.position); g.add(e);
+    });
+    g.add(body, head);
+    return g;
+}
 
-canvas.addEventListener('click', () => { if (myId) canvas.requestPointerLock(); });
+// ════════════════════════════════════════════════
+// HUB SCENE
+// ════════════════════════════════════════════════
+let hubScene, hubCamera;
+const PORTALS = [
+    { id: 'grasslands', label: '🌿 Grasslands',  color: 0x2ed573, angle: 0,              locked: false },
+    { id: 'dim2',       label: '🔒 ???',          color: 0x555566, angle: Math.PI*2/3,    locked: true  },
+    { id: 'dim3',       label: '🔒 ???',          color: 0x555566, angle: Math.PI*4/3,    locked: true  },
+];
+const PORTAL_DIST = 220;
+const ENTER_DIST  = 90;
+let hubPortalMeshes = [];
 
-document.addEventListener('pointerlockchange', () => {
-    locked = document.pointerLockElement === canvas;
-    document.getElementById('lock-prompt').style.display = (myId && !locked) ? 'block' : 'none';
-});
+function enterHub() {
+    currentDim = 'hub';
+    document.getElementById('dim-label').innerText = 'HUB';
+    document.getElementById('gen-btn').style.display = 'none';
+    clearEnemies();
 
-document.addEventListener('mousemove', e => {
-    if (!locked) return;
-    yaw   += e.movementX * 0.002;
-    pitch -= e.movementY * 0.002;
-    pitch  = Math.max(-1.1, Math.min(1.1, pitch));
-});
+    if (!hubScene) buildHubScene();
+    activeScene  = hubScene;
+    activeCamera = hubCamera;
 
-// ── UPDATE ───────────────────────────────────────────────────
-function update() {
+    pos.x = 0; pos.y = 0; pos.z = 0;
+    hubCamera.position.set(0, EYE_H, 0);
+}
+
+function buildHubScene() {
+    hubScene  = new THREE.Scene();
+    hubScene.fog = new THREE.Fog(0x08080f, 800, 2500);
+    hubCamera = makeCamera();
+
+    hubScene.add(new THREE.AmbientLight(0x4834d4, 0.6));
+    const sun = new THREE.DirectionalLight(0xffffff, 0.5);
+    sun.position.set(200, 400, 200); hubScene.add(sun);
+    const glow = new THREE.PointLight(0x4834d4, 2, 600);
+    glow.position.set(0, 80, 0); hubScene.add(glow);
+
+    // Floor
+    const floor = new THREE.Mesh(
+        new THREE.CircleGeometry(HUB_R, 64),
+        new THREE.MeshLambertMaterial({ color: 0x13132a })
+    );
+    floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true;
+    hubScene.add(floor);
+
+    // Floor edge glow
+    const ring = new THREE.Mesh(
+        new THREE.RingGeometry(HUB_R - 4, HUB_R, 64),
+        new THREE.MeshBasicMaterial({ color: 0x4834d4, side: THREE.DoubleSide })
+    );
+    ring.rotation.x = -Math.PI / 2; ring.position.y = 1;
+    hubScene.add(ring);
+
+    // Center obelisk
+    const obelisk = new THREE.Mesh(
+        new THREE.BoxGeometry(20, 120, 20),
+        new THREE.MeshLambertMaterial({ color: 0x4834d4, emissive: 0x2211aa, emissiveIntensity: 0.3 })
+    );
+    obelisk.position.y = 60;
+    const obeliskEdge = new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.BoxGeometry(20, 120, 20)),
+        new THREE.LineBasicMaterial({ color: 0xa29bfe })
+    );
+    obeliskEdge.position.y = 60;
+    hubScene.add(obelisk, obeliskEdge);
+
+    // Portals
+    hubPortalMeshes = [];
+    PORTALS.forEach(p => {
+        const px = Math.sin(p.angle) * PORTAL_DIST;
+        const pz = Math.cos(p.angle) * PORTAL_DIST;
+
+        // Portal frame (tall arch shape using a box)
+        const frame = new THREE.Mesh(
+            new THREE.BoxGeometry(70, 110, 8),
+            new THREE.MeshLambertMaterial({ color: p.locked ? 0x333344 : p.color, emissive: p.locked ? 0x111122 : p.color, emissiveIntensity: 0.25 })
+        );
+        frame.position.set(px, 55, pz);
+        frame.rotation.y = -p.angle;
+
+        // Portal fill (inner swirling plane)
+        const fill = new THREE.Mesh(
+            new THREE.PlaneGeometry(58, 96),
+            new THREE.MeshBasicMaterial({ color: p.locked ? 0x222233 : p.color, transparent: true, opacity: p.locked ? 0.25 : 0.45, side: THREE.DoubleSide })
+        );
+        fill.position.set(px, 55, pz);
+        fill.rotation.y = -p.angle;
+        fill.userData.portalId = p.id;
+        fill.userData.locked   = p.locked;
+
+        // Lock icon if locked (a floating plane with text — we do it as a small box)
+        if (p.locked) {
+            const lock = new THREE.Mesh(
+                new THREE.BoxGeometry(20, 20, 3),
+                new THREE.MeshBasicMaterial({ color: 0x888899 })
+            );
+            lock.position.set(px, 55, pz + (Math.cos(p.angle) * -5));
+            lock.rotation.y = -p.angle;
+            hubScene.add(lock);
+        }
+
+        // Label — ground marker
+        const base = new THREE.Mesh(
+            new THREE.CylinderGeometry(36, 36, 2, 16),
+            new THREE.MeshLambertMaterial({ color: p.locked ? 0x222233 : p.color, transparent: true, opacity: 0.4 })
+        );
+        base.position.set(px, 1, pz);
+        hubScene.add(frame, fill, base);
+
+        // Path from center
+        const path = new THREE.Mesh(
+            new THREE.PlaneGeometry(14, PORTAL_DIST - 40),
+            new THREE.MeshLambertMaterial({ color: p.locked ? 0x222233 : p.color, transparent: true, opacity: 0.25 })
+        );
+        path.rotation.x = -Math.PI / 2; path.position.y = 0.5;
+        path.position.x = Math.sin(p.angle) * (PORTAL_DIST / 2);
+        path.position.z = Math.cos(p.angle) * (PORTAL_DIST / 2);
+        path.rotation.z = -p.angle;
+        hubScene.add(path);
+
+        hubPortalMeshes.push({ mesh: fill, data: p, px, pz });
+    });
+
+    // Stars in sky
+    const starGeo = new THREE.BufferGeometry();
+    const starVerts = [];
+    for (let i = 0; i < 1200; i++) {
+        const theta = Math.random() * Math.PI * 2;
+        const phi   = Math.acos(2 * Math.random() - 1);
+        const r     = 2000 + Math.random() * 500;
+        starVerts.push(r * Math.sin(phi) * Math.cos(theta), r * Math.cos(phi), r * Math.sin(phi) * Math.sin(theta));
+    }
+    starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starVerts, 3));
+    hubScene.add(new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 3 })));
+}
+
+// ════════════════════════════════════════════════
+// GRASSLANDS SCENE
+// ════════════════════════════════════════════════
+let grassScene, grassCamera;
+let terrainMesh = null, treeMeshes = [], returnPortal = null;
+const TERRAIN_SEGS = 80;
+
+// Simple seeded random
+function seededRand(seed) {
+    let s = seed;
+    return function() { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+}
+
+function enterGrasslands() {
+    currentDim = 'grasslands';
+    document.getElementById('dim-label').innerText = '🌿 GRASSLANDS';
+    document.getElementById('gen-btn').style.display = isAdmin && myName === 'bartelsfamily5' ? 'block' : 'none';
+    clearEnemies();
+
+    if (!grassScene) buildGrassScene();
+    activeScene  = grassScene;
+    activeCamera = grassCamera;
+
+    // Spawn just inside the return portal
+    pos.x = 0; pos.z = G_SIZE - 200; pos.y = getTerrainY(pos.x, pos.z);
+    grassCamera.position.set(pos.x, pos.y + EYE_H, pos.z);
+
+    // Load terrain from Firebase
+    db.ref('cd_grasslands_terrain').once('value', snap => {
+        if (snap.exists()) applyTerrain(snap.val());
+    });
+
+    // Spawn enemies
+    spawnGrasslandsEnemies();
+}
+
+function buildGrassScene() {
+    grassScene  = new THREE.Scene();
+    grassScene.fog = new THREE.Fog(0x87ceeb, G_SIZE * 0.5, G_SIZE * 1.1);
+    grassScene.background = new THREE.Color(0x87ceeb);
+    grassCamera = makeCamera();
+
+    // Lights
+    grassScene.add(new THREE.AmbientLight(0xffffff, 0.7));
+    const sun = new THREE.DirectionalLight(0xfff5e0, 1.0);
+    sun.position.set(500, 800, 300); sun.castShadow = true; grassScene.add(sun);
+
+    // Terrain placeholder (flat green, replaced on generate)
+    const geo = new THREE.PlaneGeometry(G_SIZE * 2, G_SIZE * 2, TERRAIN_SEGS, TERRAIN_SEGS);
+    const mat = new THREE.MeshLambertMaterial({ color: 0x3a7d44, vertexColors: false });
+    terrainMesh = new THREE.Mesh(geo, mat);
+    terrainMesh.rotation.x = -Math.PI / 2;
+    terrainMesh.receiveShadow = true;
+    grassScene.add(terrainMesh);
+
+    // Return portal (back to hub)
+    returnPortal = new THREE.Mesh(
+        new THREE.BoxGeometry(70, 110, 8),
+        new THREE.MeshLambertMaterial({ color: 0x4834d4, emissive: 0x4834d4, emissiveIntensity: 0.3 })
+    );
+    returnPortal.position.set(0, 55, G_SIZE - 100);
+    const returnFill = new THREE.Mesh(
+        new THREE.PlaneGeometry(58, 96),
+        new THREE.MeshBasicMaterial({ color: 0x4834d4, transparent: true, opacity: 0.5, side: THREE.DoubleSide })
+    );
+    returnFill.position.set(0, 55, G_SIZE - 100);
+    returnFill.userData.returnPortal = true;
+    grassScene.add(returnPortal, returnFill);
+
+    // Return portal base
+    const rBase = new THREE.Mesh(
+        new THREE.CylinderGeometry(36, 36, 2, 16),
+        new THREE.MeshLambertMaterial({ color: 0x4834d4, transparent: true, opacity: 0.4 })
+    );
+    rBase.position.set(0, 1, G_SIZE - 100);
+    grassScene.add(rBase);
+}
+
+// ── Terrain generation ──────────────────────────────────────
+function generateGrasslands() {
+    if (myName !== 'bartelsfamily5') return;
+    const rng = seededRand(Date.now() % 9999);
+
+    // Build height map
+    const segs = TERRAIN_SEGS;
+    const heights = [];
+
+    // Biome map: for each grid cell determine Plains or Hills
+    const biomeMap = [];
+    // Place 3-5 Hills biome clusters
+    const hillCenters = [];
+    for (let b = 0; b < 4; b++) {
+        hillCenters.push({ u: rng(), v: rng(), r: 0.15 + rng() * 0.15 });
+    }
+
+    for (let vi = 0; vi <= segs; vi++) {
+        heights.push([]);
+        biomeMap.push([]);
+        for (let ui = 0; ui <= segs; ui++) {
+            const u = ui / segs, v = vi / segs;
+
+            // Is this Hills biome?
+            let hillStrength = 0;
+            hillCenters.forEach(hc => {
+                const dist = Math.sqrt((u - hc.u) ** 2 + (v - hc.v) ** 2);
+                if (dist < hc.r) hillStrength = Math.max(hillStrength, 1 - dist / hc.r);
+            });
+            biomeMap[vi].push(hillStrength);
+
+            // Height = plains bumps + hills
+            const px = u * 8, pz = v * 8;
+            const plains = (Math.sin(px * 1.3) * Math.cos(pz * 0.9) + Math.sin(px * 2.1 + 0.5) * Math.cos(pz * 1.7)) * 8;
+            const hills  = (Math.sin(px * 0.6) * Math.cos(pz * 0.5) + Math.sin(px * 1.1) * Math.cos(pz * 0.8 + 1)) * 80 + 
+                           (Math.sin(px * 0.3 + 1) * Math.cos(pz * 0.25)) * 60;
+            const h = plains * (1 - hillStrength) + hills * hillStrength;
+            heights[vi].push(Math.max(0, h));
+        }
+    }
+
+    // Apply to mesh
+    const positions = terrainMesh.geometry.attributes.position;
+    const colorArr  = [];
+    for (let i = 0; i <= segs; i++) {
+        for (let j = 0; j <= segs; j++) {
+            const idx = i * (segs + 1) + j;
+            positions.setZ(idx, heights[i][j]);
+            // Color: darker green in plains, lighter on hill tops
+            const h = heights[i][j];
+            const r = h > 60 ? 0.65 : 0.18; // rocky top vs grass
+            const g = h > 60 ? 0.60 : 0.48;
+            const b = h > 60 ? 0.40 : 0.18;
+            colorArr.push(r, g, b);
+        }
+    }
+    positions.needsUpdate = true;
+    terrainMesh.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colorArr, 3));
+    terrainMesh.material.vertexColors = true;
+    terrainMesh.geometry.computeVertexNormals();
+
+    // Clear old trees
+    treeMeshes.forEach(t => grassScene.remove(t));
+    treeMeshes = [];
+
+    // Place trees based on biome
+    for (let t = 0; t < 180; t++) {
+        const ru = rng(), rv = rng();
+        const ui = Math.round(ru * segs), vi2 = Math.round(rv * segs);
+        const h = heights[Math.min(vi2, segs)][Math.min(ui, segs)];
+        if (h > 55) continue; // don't place on steep hilltops
+        const wx = (ru - 0.5) * G_SIZE * 2;
+        const wz = (rv - 0.5) * G_SIZE * 2;
+        const tree = makeTree(rng);
+        tree.position.set(wx, h, wz);
+        grassScene.add(tree);
+        treeMeshes.push(tree);
+    }
+
+    // Serialize heights to Firebase
+    const flat = heights.map(row => row.map(v => Math.round(v * 10) / 10));
+    db.ref('cd_grasslands_terrain').set({ heights: flat, segs, generated: Date.now() });
+
+    spawnGrasslandsEnemies();
+    showPetNotif('🌿 Grasslands generated!');
+}
+
+function applyTerrain(data) {
+    if (!data.heights) return;
+    const { heights, segs: s } = data;
+    const positions = terrainMesh.geometry.attributes.position;
+    const colorArr  = [];
+    for (let i = 0; i <= s; i++) {
+        for (let j = 0; j <= s; j++) {
+            const idx = i * (s + 1) + j;
+            const h = heights[i]?.[j] ?? 0;
+            positions.setZ(idx, h);
+            const r = h > 60 ? 0.65 : 0.18;
+            const g = h > 60 ? 0.60 : 0.48;
+            const b2 = h > 60 ? 0.40 : 0.18;
+            colorArr.push(r, g, b2);
+        }
+    }
+    positions.needsUpdate = true;
+    terrainMesh.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colorArr, 3));
+    terrainMesh.material.vertexColors = true;
+    terrainMesh.geometry.computeVertexNormals();
+}
+
+function getTerrainY(wx, wz) {
+    if (!terrainMesh) return 0;
+    const u = (wx / (G_SIZE * 2) + 0.5);
+    const v = (wz / (G_SIZE * 2) + 0.5);
+    const ui = Math.round(u * TERRAIN_SEGS);
+    const vi = Math.round(v * TERRAIN_SEGS);
+    const pos = terrainMesh.geometry.attributes.position;
+    const idx = Math.max(0, Math.min(TERRAIN_SEGS, vi)) * (TERRAIN_SEGS + 1) + Math.max(0, Math.min(TERRAIN_SEGS, ui));
+    return pos.getZ(idx) || 0;
+}
+
+function makeTree(rng) {
+    const g   = new THREE.Group();
+    const h   = 40 + rng() * 40;
+    const trunk = new THREE.Mesh(
+        new THREE.CylinderGeometry(4, 6, h, 6),
+        new THREE.MeshLambertMaterial({ color: 0x5c3317 })
+    );
+    trunk.position.y = h / 2;
+    const foliage = new THREE.Mesh(
+        new THREE.ConeGeometry(28 + rng() * 12, 60 + rng() * 30, 7),
+        new THREE.MeshLambertMaterial({ color: 0x1e6b2e })
+    );
+    foliage.position.y = h + 20;
+    g.add(trunk, foliage);
+    return g;
+}
+
+// ════════════════════════════════════════════════
+// ENEMIES — billboard sprites
+// ════════════════════════════════════════════════
+const enemies = [];
+let enemyElems = []; // HTML overlay elements
+const ENEMY_DEFS = {
+    buddy:         { img: 'enemies/buddy.png',         hostile: false, speed: 18,  size: 60, y: 0    },
+    fly:           { img: 'enemies/fly.png',           hostile: false, speed: 30,  size: 40, y: 40   },
+    mountainbuddy: { img: 'enemies/mountainbuddy.png', hostile: true,  speed: 28,  size: 70, y: 0, minY: 20 },
+};
+
+function clearEnemies() {
+    enemyElems.forEach(e => e.remove());
+    enemyElems = [];
+    enemies.length = 0;
+}
+
+function spawnGrasslandsEnemies() {
+    clearEnemies();
+    const rng = seededRand(42);
+    // Buddies (plains — low terrain)
+    for (let i = 0; i < 18; i++) {
+        const wx = (rng() - 0.5) * G_SIZE * 1.6;
+        const wz = (rng() - 0.5) * G_SIZE * 1.6;
+        const wy = getTerrainY(wx, wz);
+        if (wy > 20) continue; // plains = low ground
+        spawnEnemy('buddy', wx, wy, wz);
+    }
+    // Flies (valley-loving — spawn anywhere)
+    for (let i = 0; i < 14; i++) {
+        const wx = (rng() - 0.5) * G_SIZE * 1.6;
+        const wz = (rng() - 0.5) * G_SIZE * 1.6;
+        const wy = getTerrainY(wx, wz);
+        spawnEnemy('fly', wx, wy + 40, wz);
+    }
+    // Mountain Buddies — high terrain only
+    for (let i = 0; i < 6; i++) {
+        const wx = (rng() - 0.5) * G_SIZE * 1.6;
+        const wz = (rng() - 0.5) * G_SIZE * 1.6;
+        const wy = getTerrainY(wx, wz);
+        if (wy < 40) continue;
+        spawnEnemy('mountainbuddy', wx, wy, wz);
+    }
+}
+
+function spawnEnemy(type, wx, wy, wz) {
+    const def = ENEMY_DEFS[type];
+    const el  = document.createElement('div');
+    el.style.cssText = `
+        position: fixed; pointer-events: all; z-index: 45;
+        transform: translateX(-50%);
+        cursor: pointer; user-select: none;
+        transition: transform 0.1s;
+    `;
+    const img = document.createElement('img');
+    img.src = def.img;
+    img.style.cssText = `width: ${def.size}px; height: auto; image-rendering: pixelated;`;
+    img.onerror = () => {
+        // Fallback if image not found — colored square
+        el.innerHTML = `<div style="width:${def.size}px;height:${def.size}px;background:${type==='buddy'?'#f39c12':type==='fly'?'#95a5a6':'#c0392b'};border:2px solid white;display:flex;align-items:center;justify-content:center;font-size:20px;">${type==='buddy'?'😊':type==='fly'?'🪰':'😠'}</div>`;
+    };
+    el.appendChild(img);
+    document.body.appendChild(el);
+    enemyElems.push(el);
+
+    const enemy = {
+        type, def,
+        x: wx, y: wy + def.y, z: wz,
+        el,
+        vx: (Math.random() - 0.5) * def.speed,
+        vz: (Math.random() - 0.5) * def.speed,
+        // Fly circling state
+        circling: false, circleTimer: 0, circleAngle: 0,
+        // Mountain buddy chase state
+        chasing: false,
+        petted: false,
+    };
+
+    if (type === 'buddy' || type === 'mountainbuddy') {
+        el.addEventListener('click', () => {
+            if (type === 'buddy') {
+                showPetNotif('🐾 You petted a Buddy! It loves you!');
+            }
+        });
+    }
+
+    enemies.push(enemy);
+    return enemy;
+}
+
+function updateEnemies(dt) {
+    if (currentDim !== 'grasslands') return;
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+    const cam = grassCamera;
+
+    enemies.forEach(enemy => {
+        // ── Movement ──────────────────────────────────
+        if (enemy.type === 'buddy') {
+            // Wander randomly
+            if (Math.random() < 0.01) {
+                enemy.vx = (Math.random() - 0.5) * enemy.def.speed;
+                enemy.vz = (Math.random() - 0.5) * enemy.def.speed;
+            }
+            enemy.x += enemy.vx * dt;
+            enemy.z += enemy.vz * dt;
+            enemy.y = getTerrainY(enemy.x, enemy.z);
+
+        } else if (enemy.type === 'fly') {
+            const pdx = pos.x - enemy.x, pdz = pos.z - enemy.z;
+            const pdist = Math.sqrt(pdx*pdx + pdz*pdz);
+
+            if (enemy.circling) {
+                enemy.circleTimer -= dt;
+                enemy.circleAngle += dt * 1.8;
+                enemy.x = pos.x + Math.cos(enemy.circleAngle) * 80;
+                enemy.z = pos.z + Math.sin(enemy.circleAngle) * 80;
+                enemy.y = pos.y + EYE_H * 0.5 + Math.sin(enemy.circleAngle * 2) * 10;
+                if (enemy.circleTimer <= 0) {
+                    enemy.circling = false;
+                    enemy.vx = (Math.random() - 0.5) * enemy.def.speed;
+                    enemy.vz = (Math.random() - 0.5) * enemy.def.speed;
+                }
+            } else {
+                // Random chance to start circling if near player
+                if (pdist < 200 && Math.random() < 0.005) {
+                    enemy.circling = true;
+                    enemy.circleTimer = 5 + Math.random() * 1;
+                    enemy.circleAngle = Math.atan2(enemy.z - pos.z, enemy.x - pos.x);
+                }
+                enemy.x += enemy.vx * dt;
+                enemy.z += enemy.vz * dt;
+                if (Math.random() < 0.008) {
+                    enemy.vx = (Math.random() - 0.5) * enemy.def.speed;
+                    enemy.vz = (Math.random() - 0.5) * enemy.def.speed;
+                }
+            }
+
+        } else if (enemy.type === 'mountainbuddy') {
+            const pdx = pos.x - enemy.x, pdz = pos.z - enemy.z;
+            const pdist = Math.sqrt(pdx*pdx + pdz*pdz);
+            const curY = getTerrainY(enemy.x, enemy.z);
+
+            // Only chase if player is in line of sight and enemy is on a hill
+            if (pdist < 250 && curY >= (enemy.def.minY || 0)) {
+                enemy.chasing = true;
+            } else if (pdist > 400) {
+                enemy.chasing = false;
+            }
+
+            if (enemy.chasing) {
+                const len = Math.sqrt(pdx*pdx + pdz*pdz) || 1;
+                const nextX = enemy.x + (pdx/len) * enemy.def.speed * dt;
+                const nextZ = enemy.z + (pdz/len) * enemy.def.speed * dt;
+                const nextY = getTerrainY(nextX, nextZ);
+                // Mountain buddies refuse to go below Y 20
+                if (nextY >= 20) { enemy.x = nextX; enemy.z = nextZ; }
+                else { enemy.chasing = false; }
+            } else {
+                if (Math.random() < 0.008) {
+                    enemy.vx = (Math.random() - 0.5) * enemy.def.speed * 0.5;
+                    enemy.vz = (Math.random() - 0.5) * enemy.def.speed * 0.5;
+                }
+                const nx = enemy.x + enemy.vx * dt;
+                const nz = enemy.z + enemy.vz * dt;
+                if (getTerrainY(nx, nz) >= 20) { enemy.x = nx; enemy.z = nz; }
+            }
+            enemy.y = curY;
+        }
+
+        // Clamp to terrain
+        const ty = getTerrainY(enemy.x, enemy.z);
+        if (enemy.type !== 'fly') enemy.y = ty;
+
+        // ── Billboard: project to screen ──────────────
+        const worldPos = new THREE.Vector3(enemy.x, enemy.y + (enemy.type === 'fly' ? 40 : 35), enemy.z);
+        const projected = worldPos.clone().project(cam);
+        const behind = projected.z > 1;
+        const sx = (projected.x * 0.5 + 0.5) * W;
+        const sy = (-projected.y * 0.5 + 0.5) * H;
+
+        // Scale by distance
+        const dist = Math.sqrt((enemy.x-pos.x)**2 + (enemy.y-pos.y)**2 + (enemy.z-pos.z)**2);
+        const scale = Math.max(0.2, Math.min(2.5, 600 / (dist + 1)));
+
+        if (behind || sx < -200 || sx > W+200 || sy < -200 || sy > H+200 || dist > 1800) {
+            enemy.el.style.display = 'none';
+        } else {
+            enemy.el.style.display = 'block';
+            enemy.el.style.left = sx + 'px';
+            enemy.el.style.top  = sy + 'px';
+            enemy.el.style.transform = `translateX(-50%) scale(${scale.toFixed(2)})`;
+        }
+    });
+}
+
+// ════════════════════════════════════════════════
+// PORTAL CHECKING
+// ════════════════════════════════════════════════
+let lastPortalCheck = 0;
+
+function checkPortals() {
+    const now = Date.now();
+    if (now - lastPortalCheck < 200) return;
+    lastPortalCheck = now;
+
+    const prompt = document.getElementById('portal-prompt');
+
+    if (currentDim === 'hub') {
+        let nearest = null, nearestDist = ENTER_DIST;
+        hubPortalMeshes.forEach(pm => {
+            const dx = pos.x - pm.px, dz = pos.z - pm.pz;
+            const d  = Math.sqrt(dx*dx + dz*dz);
+            if (d < nearestDist) { nearestDist = d; nearest = pm; }
+        });
+
+        if (nearest) {
+            if (nearest.data.locked) {
+                prompt.innerText = '🔒 Locked';
+                prompt.style.display = 'block';
+            } else {
+                prompt.innerText = `[ E ] Enter ${nearest.data.label}`;
+                prompt.style.display = 'block';
+                if (keys['KeyE']) {
+                    keys['KeyE'] = false;
+                    if (nearest.data.id === 'grasslands') enterGrasslands();
+                }
+            }
+        } else {
+            prompt.style.display = 'none';
+        }
+
+    } else if (currentDim === 'grasslands') {
+        // Return portal
+        const dx = pos.x - 0, dz = pos.z - (G_SIZE - 100);
+        const d  = Math.sqrt(dx*dx + dz*dz);
+        if (d < ENTER_DIST) {
+            prompt.innerText = '[ E ] Return to Hub';
+            prompt.style.display = 'block';
+            if (keys['KeyE']) { keys['KeyE'] = false; enterHub(); }
+        } else {
+            prompt.style.display = 'none';
+        }
+    }
+}
+
+// ════════════════════════════════════════════════
+// UPDATE
+// ════════════════════════════════════════════════
+function update(dt) {
     if (!myId) return;
+
     const sinY = Math.sin(yaw), cosY = Math.cos(yaw);
     let dx = 0, dz = 0;
     if (keys['KeyW']||keys['ArrowUp'])    { dx += sinY; dz -= cosY; }
     if (keys['KeyS']||keys['ArrowDown'])  { dx -= sinY; dz += cosY; }
     if (keys['KeyA']||keys['ArrowLeft'])  { dx -= cosY; dz -= sinY; }
     if (keys['KeyD']||keys['ArrowRight']) { dx += cosY; dz += sinY; }
-    const len = Math.sqrt(dx*dx+dz*dz);
+
+    const len = Math.sqrt(dx*dx + dz*dz);
     if (len > 0) { dx /= len; dz /= len; }
-    pos.x += dx * SPEED;
-    pos.z += dz * SPEED;
-    const hw = (GRID_W/2)*CELL-1, hd = (GRID_D/2)*CELL-1;
-    pos.x = Math.max(-hw, Math.min(hw, pos.x));
-    pos.z = Math.max(-hd, Math.min(hd, pos.z));
+
+    let newX = pos.x + dx * SPEED * dt;
+    let newZ = pos.z + dz * SPEED * dt;
+
+    if (currentDim === 'hub') {
+        // Stay on hub floor circle
+        const hr = Math.sqrt(newX*newX + newZ*newZ);
+        if (hr < HUB_R - 10) { pos.x = newX; pos.z = newZ; }
+        pos.y = 0;
+    } else {
+        // Grasslands — clamp to terrain bounds
+        newX = Math.max(-G_SIZE + 50, Math.min(G_SIZE - 50, newX));
+        newZ = Math.max(-G_SIZE + 50, Math.min(G_SIZE - 50, newZ));
+        pos.x = newX; pos.z = newZ;
+        pos.y = getTerrainY(pos.x, pos.z);
+    }
+
+    if (activeCamera) {
+        activeCamera.position.set(pos.x, pos.y + EYE_H, pos.z);
+        activeCamera.rotation.set(pitch, yaw, 0);
+    }
+
+    checkPortals();
+
+    // Firebase push (include dim so others can sync)
     const now = Date.now();
     if (myRef && now - lastPush > 80) {
-        myRef.update({ x: pos.x, z: pos.z, yaw });
+        myRef.update({ x: +pos.x.toFixed(1), y: +pos.y.toFixed(1), z: +pos.z.toFixed(1), yaw: +yaw.toFixed(3), dim: currentDim });
         lastPush = now;
     }
-}
 
-// ── DRAW ────────────────────────────────────────────────────
-function draw() {
-    const W = canvas.width, H = canvas.height;
-    const fovF    = W / (2 * Math.tan(FOV / 2));
-    const horizonY = (H >> 1) + Math.round(pitch * fovF);
-
-    // Sky
-    ctx.fillStyle = '#08080f';
-    ctx.fillRect(0, 0, W, horizonY);
-
-    // Floor scanlines
-    const sinYaw = Math.sin(yaw), cosYaw = Math.cos(yaw);
-    const planeX =  cosYaw * Math.tan(FOV / 2);
-    const planeZ =  sinYaw * Math.tan(FOV / 2);
-
-    for (let sy = Math.max(horizonY, 0); sy < H; sy++) {
-        const p = sy - horizonY;
-        if (p === 0) continue;
-        const rowDist = (PLAYER_H * H) / (2.0 * p);
-        const stepX   = (2.0 * rowDist * planeX) / W;
-        const stepZ   = (2.0 * rowDist * planeZ) / W;
-        let fx = pos.x + rowDist * sinYaw - (W/2) * stepX;
-        let fz = pos.z - rowDist * cosYaw - (W/2) * stepZ;
-        const shade = Math.max(0.06, Math.min(1.0, 1.0 - rowDist / 1400));
-
-        for (let x = 0; x < W; x++) {
-            const cx2 = Math.floor(fx / CELL);
-            const cz2 = Math.floor(fz / CELL);
-            const hw   = GRID_W >> 1, hd = GRID_D >> 1;
-            const inB  = cx2 >= -hw && cx2 < hw && cz2 >= -hd && cz2 < hd;
-            let r, g, b;
-            if (!inB) {
-                r=5; g=5; b=9;
-            } else {
-                const even = (((cx2%2)+2)%2) ^ (((cz2%2)+2)%2);
-                if (even) { r=Math.round(28*shade); g=Math.round(22*shade); b=Math.round(75*shade); }
-                else      { r=Math.round(18*shade); g=Math.round(14*shade); b=Math.round(50*shade); }
-            }
-            ctx.fillStyle = `rgb(${r},${g},${b})`;
-            ctx.fillRect(x, sy, 1, 1);
-            fx += stepX; fz += stepZ;
+    // Sync other player meshes (only those in same dim)
+    for (const id in otherPlayers) {
+        const p = otherPlayers[id];
+        if (p.dim !== currentDim) {
+            if (playerMeshes[id]) { activeScene?.remove(playerMeshes[id]); delete playerMeshes[id]; }
+            if (nameTags[id])     { nameTags[id].style.display = 'none'; }
+            continue;
+        }
+        if (!playerMeshes[id]) {
+            const hue   = Math.abs(hashStr(id)) % 360;
+            const color = new THREE.Color(`hsl(${hue},70%,55%)`);
+            const mesh  = makeSquareMesh(color.getHex());
+            activeScene.add(mesh);
+            playerMeshes[id] = mesh;
+        }
+        const groundY = currentDim === 'grasslands' ? getTerrainY(p.x, p.z) : 0;
+        playerMeshes[id].position.set(p.x, groundY, p.z);
+        playerMeshes[id].rotation.y = p.yaw || 0;
+    }
+    for (const id in playerMeshes) {
+        if (!otherPlayers[id] || otherPlayers[id].dim !== currentDim) {
+            activeScene?.remove(playerMeshes[id]);
+            delete playerMeshes[id];
         }
     }
 
-    // Horizon fog
-    if (horizonY > 0 && horizonY < H) {
-        const fg = ctx.createLinearGradient(0, horizonY-18, 0, horizonY+18);
-        fg.addColorStop(0, 'rgba(8,8,15,1)');
-        fg.addColorStop(0.45, 'rgba(8,8,15,0)');
-        fg.addColorStop(1, 'rgba(8,8,15,0)');
-        ctx.fillStyle = fg;
-        ctx.fillRect(0, horizonY-18, W, 36);
-    }
+    updateNameTags();
+    updateEnemies(dt);
 
-    // ── Billboard players ──────────────────────────────────
-    const sprites = [];
-    for (const id in otherPlayers) {
-        const p  = otherPlayers[id];
-        const dx = p.x - pos.x, dz = p.z - pos.z;
-        const camX =  cosYaw * dx + sinYaw * dz;
-        const camZ = -sinYaw * dx + cosYaw * dz;
-        if (camZ < 0.5) continue;
-        sprites.push({
-            x:     (W/2) + (camX/camZ) * fovF,
-            baseY: horizonY + PLAYER_H * fovF / camZ,
-            w:     Math.abs(fovF * CELL / camZ) * 0.65,
-            h:     Math.abs(fovF * CELL / camZ),
-            dist:  Math.sqrt(dx*dx+dz*dz),
-            camZ,
-            color:   p.color   || '#4834d4',
-            name:    p.name    || '?',
-            pfp:     p.pfp     || '',
-            isAdmin: p.isAdmin || false
+    // Animate hub portal glow
+    if (currentDim === 'hub' && hubPortalMeshes) {
+        const t = now * 0.001;
+        hubPortalMeshes.forEach((pm, i) => {
+            if (!pm.data.locked) pm.mesh.material.opacity = 0.35 + Math.sin(t * 2 + i) * 0.1;
         });
     }
-    sprites.sort((a,b) => b.dist - a.dist);
-
-    // Cache PFP images
-    if (!window._pfpCache) window._pfpCache = {};
-
-    for (const s of sprites) {
-        if (s.dist > 2500) continue;
-        const fade = Math.max(0, Math.min(1, 1 - s.dist / 1800));
-        const top  = s.baseY - s.h;
-
-        ctx.save();
-        ctx.globalAlpha = fade;
-
-        // Body
-        ctx.fillStyle = s.color;
-        ctx.fillRect(s.x - s.w/2, top, s.w, s.h);
-
-        // If they have a PFP, render it as a texture on the face
-        if (s.pfp && s.dist < 600) {
-            if (!window._pfpCache[s.pfp]) {
-                const img = new Image();
-                img.crossOrigin = 'anonymous';
-                img.src = s.pfp;
-                window._pfpCache[s.pfp] = img;
-            }
-            const img = window._pfpCache[s.pfp];
-            if (img.complete && img.naturalWidth > 0) {
-                ctx.save();
-                ctx.globalAlpha = fade * Math.max(0, 1 - s.dist / 600);
-                // Clip to body rect
-                ctx.beginPath();
-                ctx.rect(s.x - s.w/2, top, s.w, s.h);
-                ctx.clip();
-                ctx.drawImage(img, s.x - s.w/2, top, s.w, s.h);
-                ctx.restore();
-            }
-        } else {
-            // Default face detail
-            ctx.fillStyle = 'rgba(0,0,0,0.22)';
-            ctx.fillRect(s.x - s.w/2+2, top+2, s.w-4, s.h*0.45);
-            const ew = Math.max(1, s.w*0.11);
-            const ey = top + s.h*0.14;
-            ctx.fillStyle = 'white';
-            ctx.fillRect(s.x - s.w*0.22, ey, ew, ew);
-            ctx.fillRect(s.x + s.w*0.11, ey, ew, ew);
-        }
-
-        // Admin glow outline
-        if (s.isAdmin) {
-            ctx.strokeStyle = '#ffa502';
-            ctx.lineWidth   = Math.max(1, s.w * 0.06);
-            ctx.strokeRect(s.x - s.w/2, top, s.w, s.h);
-        }
-
-        // Nametag
-        if (s.dist < 750) {
-            const tf = Math.max(0, 1 - s.dist/750);
-            ctx.globalAlpha = tf * fade;
-            const fs = Math.max(9, Math.round(s.w * 0.52));
-            ctx.font      = `bold ${fs}px Courier New`;
-            ctx.textAlign = 'center';
-            const label = s.name + (s.isAdmin ? ' ★' : '');
-            const tw    = ctx.measureText(label).width;
-            ctx.fillStyle = 'rgba(10,10,20,0.8)';
-            ctx.fillRect(s.x - tw/2 - 5, top - fs - 9, tw + 10, fs + 5);
-            ctx.fillStyle = s.isAdmin ? '#ffa502' : '#a29bfe';
-            ctx.fillText(label, s.x, top - 6);
-        }
-
-        ctx.restore();
-    }
-
-    // Vignette
-    const vg = ctx.createRadialGradient(W/2, H/2, H*0.25, W/2, H/2, H*0.8);
-    vg.addColorStop(0, 'rgba(0,0,0,0)');
-    vg.addColorStop(1, 'rgba(0,0,0,0.5)');
-    ctx.fillStyle = vg;
-    ctx.fillRect(0,0,W,H);
 }
 
-// ── LOOP ────────────────────────────────────────────────────
+// ════════════════════════════════════════════════
+// NAMETAGS
+// ════════════════════════════════════════════════
+function updateNameTags() {
+    if (!activeCamera) return;
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+
+    for (const id in otherPlayers) {
+        const p = otherPlayers[id];
+        if (p.dim !== currentDim) { if (nameTags[id]) nameTags[id].style.display = 'none'; continue; }
+        if (!nameTags[id]) {
+            const el = document.createElement('div');
+            el.style.cssText = `position:fixed;pointer-events:none;z-index:40;
+                background:rgba(15,15,26,0.85);border:1px solid var(--primary);
+                color:#a29bfe;font-size:10px;font-weight:600;
+                padding:2px 7px;border-radius:4px;
+                transform:translateX(-50%);white-space:nowrap;
+                font-family:'Courier New',monospace;`;
+            document.body.appendChild(el);
+            nameTags[id] = el;
+        }
+        const tag = nameTags[id];
+        const groundY = currentDim === 'grasslands' ? getTerrainY(p.x, p.z) : 0;
+        const wp  = new THREE.Vector3(p.x, groundY + 75, p.z);
+        const prj = wp.clone().project(activeCamera);
+        const sx  = (prj.x * 0.5 + 0.5) * W;
+        const sy  = (-prj.y * 0.5 + 0.5) * H;
+        const beh = prj.z > 1;
+        tag.innerText = p.name + (p.isAdmin ? ' ★' : '');
+        if (p.isAdmin) tag.style.color = '#ffa502';
+        if (beh || sx < 0 || sx > W || sy < 0 || sy > H) tag.style.display = 'none';
+        else { tag.style.display = 'block'; tag.style.left = sx+'px'; tag.style.top = (sy-8)+'px'; }
+    }
+    for (const id in nameTags) {
+        if (!otherPlayers[id]) { nameTags[id].remove(); delete nameTags[id]; }
+    }
+}
+
+// ════════════════════════════════════════════════
+// LOOP
+// ════════════════════════════════════════════════
 function loop() {
-    update();
-    draw();
     requestAnimationFrame(loop);
+    const dt = Math.min(clock3.getDelta(), 0.05);
+    update(dt);
+    if (activeScene && activeCamera) renderer.render(activeScene, activeCamera);
+}
+
+// ════════════════════════════════════════════════
+// UTILS
+// ════════════════════════════════════════════════
+function hashStr(s) {
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = s.charCodeAt(i) + ((h << 5) - h);
+    return h;
+}
+
+let petNotifTimer = null;
+function showPetNotif(msg) {
+    const el = document.getElementById('pet-notif');
+    el.innerText = msg; el.style.display = 'block';
+    clearTimeout(petNotifTimer);
+    petNotifTimer = setTimeout(() => el.style.display = 'none', 2500);
 }
 </script>
 </body>
