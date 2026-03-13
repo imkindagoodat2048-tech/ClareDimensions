@@ -682,62 +682,113 @@ function generateGrasslands() {
     if (myName !== 'bartelsfamily5') return;
     const rng = seededRand(Date.now() % 9999);
 
-    // Build height map
     const segs = TERRAIN_SEGS;
     const heights = [];
 
-    // Biome map: for each grid cell determine Plains or Hills
-    const biomeMap = [];
-    // Place 3-5 Hills biome clusters
-    const hillCenters = [];
-    for (let b = 0; b < 4; b++) {
-        hillCenters.push({ u: rng(), v: rng(), r: 0.2 + rng() * 0.2 });
+    // ── Step 1: Place biome zone centres ──────────────────────
+    // 3-4 Valley+Mountain complexes (always adjacent — mountain rings valley)
+    // Rest of map is Plains
+    const biomeZones = []; // { type: 'valley'|'mountain'|'plains', cx, cz, r, strength }
+
+    const numComplexes = 3 + Math.floor(rng() * 2); // 3 or 4
+    for (let b = 0; b < numComplexes; b++) {
+        // Place complex away from map edge and from other complexes
+        const cx = 0.15 + rng() * 0.7;
+        const cz = 0.15 + rng() * 0.7;
+        const valleyR  = 0.08 + rng() * 0.07;  // valley core
+        const mountainR = valleyR + 0.05 + rng() * 0.05; // mountain ring around it
+
+        biomeZones.push({ type: 'valley',   cx, cz, r: valleyR,   depth:  -(120 + rng() * 100) });
+        biomeZones.push({ type: 'mountain', cx, cz, r: mountainR, height:  (200 + rng() * 180) });
     }
+
+    // ── Step 2: Build height map ────────────────────────────────
+    // Also store biome type per vertex for enemy spawning
+    const biomeGrid = []; // 'plains' | 'valley' | 'mountain'
 
     for (let vi = 0; vi <= segs; vi++) {
         heights.push([]);
-        biomeMap.push([]);
+        biomeGrid.push([]);
         for (let ui = 0; ui <= segs; ui++) {
             const u = ui / segs, v = vi / segs;
-
-            // Is this Hills biome?
-            let hillStrength = 0;
-            hillCenters.forEach(hc => {
-                const dist = Math.sqrt((u - hc.u) ** 2 + (v - hc.v) ** 2);
-                if (dist < hc.r) hillStrength = Math.max(hillStrength, 1 - dist / hc.r);
-            });
-            biomeMap[vi].push(hillStrength);
-
-            // Use world coords for noise frequency so scale is consistent
             const wx2 = (u - 0.5) * G_SIZE * 2;
             const wz2 = (v - 0.5) * G_SIZE * 2;
-            const freq = 1 / 600;
-            const plains = (
-                Math.sin(wx2 * freq * 1.3) * Math.cos(wz2 * freq * 0.9) +
-                Math.sin(wx2 * freq * 2.1 + 0.5) * Math.cos(wz2 * freq * 1.7)
-            ) * 12;
-            const hills = (
-                Math.sin(wx2 * freq * 0.5) * Math.cos(wz2 * freq * 0.4) * 180 +
-                Math.sin(wx2 * freq * 0.9 + 1) * Math.cos(wz2 * freq * 0.7) * 120 +
-                Math.sin(wx2 * freq * 0.25) * Math.cos(wz2 * freq * 0.2 + 0.5) * 80
-            );
-            const h = plains * (1 - hillStrength) + hills * hillStrength;
-            heights[vi].push(Math.max(0, h));
+
+            // Tiny plains noise — subtle bumps everywhere as base
+            const freq = 1 / 400;
+            const plainsBump = (
+                Math.sin(wx2 * freq * 1.3 + 0.3) * Math.cos(wz2 * freq * 0.9) +
+                Math.sin(wx2 * freq * 2.8 + 1.1) * Math.cos(wz2 * freq * 2.1 + 0.7)
+            ) * 10; // max ~20 units — tiny bumps
+
+            // Evaluate each biome zone's influence
+            let valleyInfluence  = 0, valleyDepth  = 0;
+            let mountainInfluence = 0, mountainHeight = 0;
+
+            biomeZones.forEach(zone => {
+                const du = u - zone.cx, dv = v - zone.cz;
+                const dist = Math.sqrt(du*du + dv*dv);
+                const t = Math.max(0, 1 - dist / zone.r); // 0..1, smooth
+                const tSmooth = t * t * (3 - 2 * t); // smoothstep
+
+                if (zone.type === 'valley' && tSmooth > valleyInfluence) {
+                    valleyInfluence = tSmooth;
+                    valleyDepth     = zone.depth;
+                }
+                if (zone.type === 'mountain' && tSmooth > mountainInfluence) {
+                    mountainInfluence = tSmooth;
+                    mountainHeight    = zone.height;
+                }
+            });
+
+            // Mountains win over valleys at the same location (ring outside valley)
+            // Valley sinks the terrain below 0, mountains push it up
+            let h = plainsBump; // base is plains
+
+            if (mountainInfluence > 0 && mountainInfluence >= valleyInfluence) {
+                // Pointy ridgeline — add some per-vertex noise for rugged peaks
+                const ridgeNoise = Math.sin(wx2 * freq * 4.1 + 2.3) * Math.cos(wz2 * freq * 3.7 + 1.1) * 40;
+                h = plainsBump * (1 - mountainInfluence) + (mountainHeight + ridgeNoise) * mountainInfluence;
+            } else if (valleyInfluence > 0) {
+                // Valley floor — keep it somewhat flat at the bottom
+                const valleyFloor = valleyDepth * valleyInfluence;
+                h = plainsBump * (1 - valleyInfluence) + valleyFloor;
+            }
+
+            // Terrain minimum is -280 (deep valleys), no hard floor so valleys feel deep
+            heights[vi].push(Math.max(-280, h));
+            // Tag biome
+            if (mountainInfluence > 0.35 && mountainInfluence >= valleyInfluence) biomeGrid[vi].push('mountain');
+            else if (valleyInfluence > 0.35) biomeGrid[vi].push('valley');
+            else biomeGrid[vi].push('plains');
         }
     }
 
-    // Apply to mesh
+    // ── Step 3: Apply to mesh with biome-based vertex colours ───
     const positions = terrainMesh.geometry.attributes.position;
     const colorArr  = [];
     for (let i = 0; i <= segs; i++) {
         for (let j = 0; j <= segs; j++) {
-            const idx = i * (segs + 1) + j;
-            positions.setZ(idx, heights[i][j]);
-            // Color: darker green in plains, lighter on hill tops
-            const h = heights[i][j];
-            const r = h > 200 ? 0.55 : h > 80 ? 0.28 : 0.18;
-            const g = h > 200 ? 0.50 : h > 80 ? 0.52 : 0.48;
-            const b = h > 200 ? 0.35 : h > 80 ? 0.22 : 0.18;
+            const idx    = i * (segs + 1) + j;
+            const h      = heights[i][j];
+            const biome  = biomeGrid[i][j];
+            positions.setZ(idx, h);
+
+            let r, g, b;
+            if (biome === 'mountain') {
+                // Grey rocky peaks → darker slate at very top
+                if (h > 280) { r=0.75; g=0.72; b=0.68; }       // snow/rock
+                else if (h > 160) { r=0.52; g=0.48; b=0.42; }  // grey rock
+                else { r=0.32; g=0.40; b=0.22; }                // mountain grass
+            } else if (biome === 'valley') {
+                // Deep dark green / murky at the bottom
+                if (h < -160) { r=0.08; g=0.18; b=0.10; }      // very deep, dark
+                else if (h < -60) { r=0.12; g=0.28; b=0.14; }  // deep valley
+                else { r=0.16; g=0.38; b=0.18; }                // valley slope
+            } else {
+                // Plains — bright grass with tiny variation
+                r=0.20; g=0.52; b=0.20;
+            }
             colorArr.push(r, g, b);
         }
     }
@@ -746,16 +797,17 @@ function generateGrasslands() {
     terrainMesh.material.vertexColors = true;
     terrainMesh.geometry.computeVertexNormals();
 
-    // Clear old trees
+    // ── Step 4: Trees ────────────────────────────────────────────
     treeMeshes.forEach(t => grassScene.remove(t));
     treeMeshes = [];
-
-    // Place trees based on biome
-    for (let t = 0; t < 180; t++) {
+    for (let t = 0; t < 200; t++) {
         const ru = rng(), rv = rng();
-        const ui = Math.round(ru * segs), vi2 = Math.round(rv * segs);
-        const h = heights[Math.min(vi2, segs)][Math.min(ui, segs)];
-        if (h > 180) continue; // don't place on steep hilltops
+        const ui = Math.min(Math.round(ru * segs), segs);
+        const vi2 = Math.min(Math.round(rv * segs), segs);
+        const h   = heights[vi2][ui];
+        const bm  = biomeGrid[vi2][ui];
+        if (bm === 'mountain' && h > 150) continue; // no trees on high peaks
+        if (bm === 'valley'   && h < -100) continue; // no trees in deep valley floor
         const wx = (ru - 0.5) * G_SIZE * 2;
         const wz = (rv - 0.5) * G_SIZE * 2;
         const tree = makeTree(rng);
@@ -764,28 +816,46 @@ function generateGrasslands() {
         treeMeshes.push(tree);
     }
 
-    // Serialize heights to Firebase
+    // ── Step 5: Save to Firebase (include biomeGrid for enemy spawning) ─
     const flat = heights.map(row => row.map(v => Math.round(v * 10) / 10));
-    db.ref('cd_grasslands_terrain').set({ heights: flat, segs, generated: Date.now() });
+    const flatBiome = biomeGrid.map(row => row.join(','));
+    db.ref('cd_grasslands_terrain').set({ heights: flat, biomeGrid: flatBiome, segs, generated: Date.now() });
 
     spawnGrasslandsEnemies();
     showPetNotif('🌿 Grasslands generated!');
 }
 
+let currentBiomeGrid = null; // set after terrain loads
+
 function applyTerrain(data) {
     if (!data.heights) return;
-    const { heights, segs: s } = data;
+    const { heights, biomeGrid: rawBiome, segs: s } = data;
+
+    // Parse biomeGrid
+    currentBiomeGrid = rawBiome ? rawBiome.map(row => row.split(',')) : null;
+
     const positions = terrainMesh.geometry.attributes.position;
     const colorArr  = [];
     for (let i = 0; i <= s; i++) {
         for (let j = 0; j <= s; j++) {
-            const idx = i * (s + 1) + j;
-            const h = heights[i]?.[j] ?? 0;
+            const idx   = i * (s + 1) + j;
+            const h     = heights[i]?.[j] ?? 0;
+            const biome = currentBiomeGrid?.[i]?.[j] ?? 'plains';
             positions.setZ(idx, h);
-            const r = h > 200 ? 0.55 : h > 80 ? 0.28 : 0.18;
-            const g = h > 200 ? 0.50 : h > 80 ? 0.52 : 0.48;
-            const b2 = h > 200 ? 0.35 : h > 80 ? 0.22 : 0.18;
-            colorArr.push(r, g, b2);
+
+            let r, g, b;
+            if (biome === 'mountain') {
+                if (h > 280)      { r=0.75; g=0.72; b=0.68; }
+                else if (h > 160) { r=0.52; g=0.48; b=0.42; }
+                else              { r=0.32; g=0.40; b=0.22; }
+            } else if (biome === 'valley') {
+                if (h < -160)     { r=0.08; g=0.18; b=0.10; }
+                else if (h < -60) { r=0.12; g=0.28; b=0.14; }
+                else              { r=0.16; g=0.38; b=0.18; }
+            } else {
+                r=0.20; g=0.52; b=0.20;
+            }
+            colorArr.push(r, g, b);
         }
     }
     positions.needsUpdate = true;
@@ -823,18 +893,40 @@ function makeTree(rng) {
 }
 
 // ════════════════════════════════════════════════
-// ENEMIES — billboard sprites
+// ENEMIES — THREE.Sprite (depth-correct occlusion)
 // ════════════════════════════════════════════════
 const enemies = [];
-let enemyElems = []; // HTML overlay elements
+let enemyElems = []; // kept for clearEnemies compat, unused now
 const ENEMY_DEFS = {
-    buddy:         { img: 'enemies/buddy.png',         hostile: false, speed: 18,  size: 60, y: 0    },
-    fly:           { img: 'enemies/fly.png',           hostile: false, speed: 30,  size: 40, y: 40   },
-    mountainbuddy: { img: 'enemies/mountainbuddy.png', hostile: true,  speed: 28,  size: 70, y: 0, minY: 120 },
+    buddy:         { img: 'enemies/buddy.png',         hostile: false, speed: 18,  size: 80,  y: 0,   minY: 0   },
+    fly:           { img: 'enemies/fly.png',           hostile: false, speed: 30,  size: 55,  y: 40,  minY: 0   },
+    mountainbuddy: { img: 'enemies/mountainbuddy.png', hostile: true,  speed: 28,  size: 90,  y: 0,   minY: 120 },
 };
 
+// Texture cache
+const _spriteTexCache = {};
+function getSpriteTexture(type, def, cb) {
+    if (_spriteTexCache[type]) { cb(_spriteTexCache[type]); return; }
+    const tex = new THREE.TextureLoader().load(
+        def.img,
+        t => { _spriteTexCache[type] = t; cb(t); },
+        undefined,
+        () => {
+            // Fallback: draw a coloured square on a canvas
+            const c = document.createElement('canvas'); c.width = c.height = 64;
+            const ctx = c.getContext('2d');
+            ctx.fillStyle = type==='buddy'?'#f39c12':type==='fly'?'#95a5a6':'#c0392b';
+            ctx.fillRect(0,0,64,64);
+            ctx.fillStyle='white'; ctx.font='36px serif'; ctx.textAlign='center';
+            ctx.fillText(type==='buddy'?'😊':type==='fly'?'🪰':'😠', 32, 44);
+            const t2 = new THREE.CanvasTexture(c);
+            _spriteTexCache[type] = t2; cb(t2);
+        }
+    );
+}
+
 function clearEnemies() {
-    enemyElems.forEach(e => e.remove());
+    enemies.forEach(e => { if (e.sprite && grassScene) grassScene.remove(e.sprite); });
     enemyElems = [];
     enemies.length = 0;
 }
@@ -842,85 +934,99 @@ function clearEnemies() {
 function spawnGrasslandsEnemies() {
     clearEnemies();
     const rng = seededRand(42);
-    // Buddies (plains — low terrain)
-    for (let i = 0; i < 18; i++) {
-        const wx = (rng() - 0.5) * G_SIZE * 1.6;
-        const wz = (rng() - 0.5) * G_SIZE * 1.6;
+    const segs = TERRAIN_SEGS;
+
+    function getBiome(wx, wz) {
+        if (!currentBiomeGrid) return 'plains';
+        const u  = Math.round(((wx / (G_SIZE * 2)) + 0.5) * segs);
+        const v  = Math.round(((wz / (G_SIZE * 2)) + 0.5) * segs);
+        return currentBiomeGrid[Math.max(0,Math.min(segs,v))]?.[Math.max(0,Math.min(segs,u))] ?? 'plains';
+    }
+
+    // Buddies — Plains only
+    let buddyCount = 0;
+    for (let i = 0; i < 200 && buddyCount < 18; i++) {
+        const wx = (rng() - 0.5) * G_SIZE * 1.8;
+        const wz = (rng() - 0.5) * G_SIZE * 1.8;
+        if (getBiome(wx, wz) !== 'plains') continue;
         const wy = getTerrainY(wx, wz);
-        if (wy > 60) continue; // plains = low ground
         spawnEnemy('buddy', wx, wy, wz);
+        buddyCount++;
     }
-    // Flies (valley-loving — spawn anywhere)
-    for (let i = 0; i < 14; i++) {
-        const wx = (rng() - 0.5) * G_SIZE * 1.6;
-        const wz = (rng() - 0.5) * G_SIZE * 1.6;
+
+    // Flies — Valley biome, flying above the floor
+    let flyCount = 0;
+    for (let i = 0; i < 200 && flyCount < 14; i++) {
+        const wx = (rng() - 0.5) * G_SIZE * 1.8;
+        const wz = (rng() - 0.5) * G_SIZE * 1.8;
+        if (getBiome(wx, wz) !== 'valley') continue;
         const wy = getTerrainY(wx, wz);
-        spawnEnemy('fly', wx, wy + 40, wz);
+        spawnEnemy('fly', wx, wy, wz);
+        flyCount++;
     }
-    // Mountain Buddies — high terrain only
-    for (let i = 0; i < 6; i++) {
-        const wx = (rng() - 0.5) * G_SIZE * 1.6;
-        const wz = (rng() - 0.5) * G_SIZE * 1.6;
+
+    // Mountain Buddies — Mountain biome only
+    let mbCount = 0;
+    for (let i = 0; i < 200 && mbCount < 8; i++) {
+        const wx = (rng() - 0.5) * G_SIZE * 1.8;
+        const wz = (rng() - 0.5) * G_SIZE * 1.8;
+        if (getBiome(wx, wz) !== 'mountain') continue;
         const wy = getTerrainY(wx, wz);
-        if (wy < 150) continue;
+        if (wy < 120) continue;
         spawnEnemy('mountainbuddy', wx, wy, wz);
+        mbCount++;
     }
 }
 
 function spawnEnemy(type, wx, wy, wz) {
     const def = ENEMY_DEFS[type];
-    const el  = document.createElement('div');
-    el.style.cssText = `
-        position: fixed; pointer-events: all; z-index: 45;
-        transform: translateX(-50%);
-        cursor: pointer; user-select: none;
-        transition: transform 0.1s;
-    `;
-    const img = document.createElement('img');
-    img.src = def.img;
-    img.style.cssText = `width: ${def.size}px; height: auto; image-rendering: pixelated;`;
-    img.onerror = () => {
-        // Fallback if image not found — colored square
-        el.innerHTML = `<div style="width:${def.size}px;height:${def.size}px;background:${type==='buddy'?'#f39c12':type==='fly'?'#95a5a6':'#c0392b'};border:2px solid white;display:flex;align-items:center;justify-content:center;font-size:20px;">${type==='buddy'?'😊':type==='fly'?'🪰':'😠'}</div>`;
-    };
-    el.appendChild(img);
-    document.body.appendChild(el);
-    enemyElems.push(el);
-
     const enemy = {
         type, def,
         x: wx, y: wy + def.y, z: wz,
-        el,
+        sprite: null,
         vx: (Math.random() - 0.5) * def.speed,
         vz: (Math.random() - 0.5) * def.speed,
-        // Fly circling state
         circling: false, circleTimer: 0, circleAngle: 0,
-        // Mountain buddy chase state
         chasing: false,
-        petted: false,
     };
 
-    if (type === 'buddy' || type === 'mountainbuddy') {
-        el.addEventListener('click', () => {
-            if (type === 'buddy') {
-                showPetNotif('🐾 You petted a Buddy! It loves you!');
-            }
-        });
-    }
+    getSpriteTexture(type, def, tex => {
+        const mat    = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, depthWrite: false, sizeAttenuation: true });
+        const sprite = new THREE.Sprite(mat);
+        sprite.scale.set(def.size, def.size, 1);
+        sprite.position.set(enemy.x, enemy.y + def.size * 0.5, enemy.z);
+        sprite.userData.enemyType = type;
+        if (type === 'buddy') {
+            sprite.userData.clickable = true;
+        }
+        grassScene.add(sprite);
+        enemy.sprite = sprite;
+    });
 
     enemies.push(enemy);
     return enemy;
 }
 
+// Click-to-pet via raycaster on the canvas
+const _raycaster = new THREE.Raycaster();
+const _mouse     = new THREE.Vector2();
+wrap.addEventListener('click', () => {
+    if (currentDim !== 'grasslands' || !locked) return;
+    _mouse.set(0, 0); // centre of screen (crosshair)
+    _raycaster.setFromCamera(_mouse, grassCamera);
+    const spriteObjs = enemies.filter(e => e.sprite).map(e => e.sprite);
+    const hits = _raycaster.intersectObjects(spriteObjs);
+    if (hits.length > 0 && hits[0].object.userData.enemyType === 'buddy') {
+        showPetNotif('🐾 You petted a Buddy! It loves you!');
+    }
+});
+
 function updateEnemies(dt) {
     if (currentDim !== 'grasslands') return;
-    const W = wrap.clientWidth, H = wrap.clientHeight;
-    const cam = grassCamera;
 
     enemies.forEach(enemy => {
         // ── Movement ──────────────────────────────────
         if (enemy.type === 'buddy') {
-            // Wander randomly
             if (Math.random() < 0.01) {
                 enemy.vx = (Math.random() - 0.5) * enemy.def.speed;
                 enemy.vz = (Math.random() - 0.5) * enemy.def.speed;
@@ -932,7 +1038,6 @@ function updateEnemies(dt) {
         } else if (enemy.type === 'fly') {
             const pdx = pos.x - enemy.x, pdz = pos.z - enemy.z;
             const pdist = Math.sqrt(pdx*pdx + pdz*pdz);
-
             if (enemy.circling) {
                 enemy.circleTimer -= dt;
                 enemy.circleAngle += dt * 1.8;
@@ -945,7 +1050,6 @@ function updateEnemies(dt) {
                     enemy.vz = (Math.random() - 0.5) * enemy.def.speed;
                 }
             } else {
-                // Random chance to start circling if near player
                 if (pdist < 200 && Math.random() < 0.005) {
                     enemy.circling = true;
                     enemy.circleTimer = 5 + Math.random() * 1;
@@ -963,22 +1067,14 @@ function updateEnemies(dt) {
             const pdx = pos.x - enemy.x, pdz = pos.z - enemy.z;
             const pdist = Math.sqrt(pdx*pdx + pdz*pdz);
             const curY = getTerrainY(enemy.x, enemy.z);
-
-            // Only chase if player is in line of sight and enemy is on a hill
-            if (pdist < 250 && curY >= (enemy.def.minY || 0)) {
-                enemy.chasing = true;
-            } else if (pdist > 400) {
-                enemy.chasing = false;
-            }
-
+            if (pdist < 250 && curY >= enemy.def.minY) enemy.chasing = true;
+            else if (pdist > 400) enemy.chasing = false;
             if (enemy.chasing) {
                 const len = Math.sqrt(pdx*pdx + pdz*pdz) || 1;
                 const nextX = enemy.x + (pdx/len) * enemy.def.speed * dt;
                 const nextZ = enemy.z + (pdz/len) * enemy.def.speed * dt;
-                const nextY = getTerrainY(nextX, nextZ);
-                // Mountain buddies refuse to go below Y 120
-                if (nextY >= 120) { enemy.x = nextX; enemy.z = nextZ; }
-                else { enemy.chasing = false; }
+                if (getTerrainY(nextX, nextZ) >= 120) { enemy.x = nextX; enemy.z = nextZ; }
+                else enemy.chasing = false;
             } else {
                 if (Math.random() < 0.008) {
                     enemy.vx = (Math.random() - 0.5) * enemy.def.speed * 0.5;
@@ -988,43 +1084,15 @@ function updateEnemies(dt) {
                 const nz = enemy.z + enemy.vz * dt;
                 if (getTerrainY(nx, nz) >= 120) { enemy.x = nx; enemy.z = nz; }
             }
-            enemy.y = curY;
+            enemy.y = getTerrainY(enemy.x, enemy.z);
         }
 
-        // Clamp to terrain
-        const ty = getTerrainY(enemy.x, enemy.z);
-        if (enemy.type !== 'fly') enemy.y = ty;
+        if (enemy.type !== 'fly') enemy.y = getTerrainY(enemy.x, enemy.z);
 
-        // ── Billboard: project to screen ──────────────
-        const worldPos = new THREE.Vector3(enemy.x, enemy.y + (enemy.type === 'fly' ? 40 : 35), enemy.z);
-        const projected = worldPos.clone().project(cam);
-        const behind = projected.z > 1;
-        const sx = (projected.x * 0.5 + 0.5) * W;
-        const sy = (-projected.y * 0.5 + 0.5) * H;
-
-        // Scale by distance
-        const dist = Math.sqrt((enemy.x-pos.x)**2 + (enemy.y-pos.y)**2 + (enemy.z-pos.z)**2);
-        const scale = Math.max(0.2, Math.min(2.5, 600 / (dist + 1)));
-
-        // z-index: closer enemies get higher z so they sort correctly against each other.
-        // Cap at 44 so they never overlap the HUD (z-index 50+), and far ones go lower.
-        const zIdx = Math.max(1, Math.round(44 - (dist / 80)));
-
-        // Hide if behind camera, out of screen, too far, OR if the enemy is
-        // behind terrain/trees — approximate by checking if its projected depth
-        // is deeper than expected (simple distance gate: if dist > 1200 and
-        // enemy is lower than camera, likely behind a hill)
-        const terrainAtEnemy = getTerrainY(enemy.x, enemy.z);
-        const occluded = (enemy.type !== 'fly') && (terrainAtEnemy > pos.y + EYE_H + 10) && (dist > 150);
-
-        if (behind || sx < -200 || sx > W+200 || sy < -200 || sy > H+200 || dist > 1800 || occluded) {
-            enemy.el.style.display = 'none';
-        } else {
-            enemy.el.style.display = 'block';
-            enemy.el.style.left      = sx + 'px';
-            enemy.el.style.top       = sy + 'px';
-            enemy.el.style.zIndex    = zIdx;
-            enemy.el.style.transform = `translateX(-50%) scale(${scale.toFixed(2)})`;
+        // ── Update sprite position (Three.js handles occlusion) ──
+        if (enemy.sprite) {
+            enemy.sprite.position.set(enemy.x, enemy.y + enemy.def.size * 0.5, enemy.z);
+            // Always face camera (sprites do this automatically, but keep scale consistent)
         }
     });
 }
