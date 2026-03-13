@@ -424,7 +424,7 @@ function initRenderer() {
     document.addEventListener('keyup',   e => { keys[e.code] = false; });
     document.addEventListener('mousemove', e => {
         if (!locked) return;
-        yaw   += e.movementX * 0.002;
+        yaw   -= e.movementX * 0.002;
         pitch -= e.movementY * 0.002;
         pitch  = Math.max(-1.0, Math.min(0.9, pitch));
     });
@@ -601,7 +601,7 @@ function buildHubScene() {
 // ════════════════════════════════════════════════
 let grassScene, grassCamera;
 let terrainMesh = null, treeMeshes = [], returnPortal = null;
-const TERRAIN_SEGS = 80;
+const TERRAIN_SEGS = 120;
 
 // Simple seeded random
 function seededRand(seed) {
@@ -688,7 +688,7 @@ function generateGrasslands() {
     // Place 3-5 Hills biome clusters
     const hillCenters = [];
     for (let b = 0; b < 4; b++) {
-        hillCenters.push({ u: rng(), v: rng(), r: 0.15 + rng() * 0.15 });
+        hillCenters.push({ u: rng(), v: rng(), r: 0.2 + rng() * 0.2 });
     }
 
     for (let vi = 0; vi <= segs; vi++) {
@@ -705,11 +705,19 @@ function generateGrasslands() {
             });
             biomeMap[vi].push(hillStrength);
 
-            // Height = plains bumps + hills
-            const px = u * 8, pz = v * 8;
-            const plains = (Math.sin(px * 1.3) * Math.cos(pz * 0.9) + Math.sin(px * 2.1 + 0.5) * Math.cos(pz * 1.7)) * 8;
-            const hills  = (Math.sin(px * 0.6) * Math.cos(pz * 0.5) + Math.sin(px * 1.1) * Math.cos(pz * 0.8 + 1)) * 80 + 
-                           (Math.sin(px * 0.3 + 1) * Math.cos(pz * 0.25)) * 60;
+            // Use world coords for noise frequency so scale is consistent
+            const wx2 = (u - 0.5) * G_SIZE * 2;
+            const wz2 = (v - 0.5) * G_SIZE * 2;
+            const freq = 1 / 600;
+            const plains = (
+                Math.sin(wx2 * freq * 1.3) * Math.cos(wz2 * freq * 0.9) +
+                Math.sin(wx2 * freq * 2.1 + 0.5) * Math.cos(wz2 * freq * 1.7)
+            ) * 12;
+            const hills = (
+                Math.sin(wx2 * freq * 0.5) * Math.cos(wz2 * freq * 0.4) * 180 +
+                Math.sin(wx2 * freq * 0.9 + 1) * Math.cos(wz2 * freq * 0.7) * 120 +
+                Math.sin(wx2 * freq * 0.25) * Math.cos(wz2 * freq * 0.2 + 0.5) * 80
+            );
             const h = plains * (1 - hillStrength) + hills * hillStrength;
             heights[vi].push(Math.max(0, h));
         }
@@ -724,9 +732,9 @@ function generateGrasslands() {
             positions.setZ(idx, heights[i][j]);
             // Color: darker green in plains, lighter on hill tops
             const h = heights[i][j];
-            const r = h > 60 ? 0.65 : 0.18; // rocky top vs grass
-            const g = h > 60 ? 0.60 : 0.48;
-            const b = h > 60 ? 0.40 : 0.18;
+            const r = h > 200 ? 0.55 : h > 80 ? 0.28 : 0.18;
+            const g = h > 200 ? 0.50 : h > 80 ? 0.52 : 0.48;
+            const b = h > 200 ? 0.35 : h > 80 ? 0.22 : 0.18;
             colorArr.push(r, g, b);
         }
     }
@@ -744,7 +752,7 @@ function generateGrasslands() {
         const ru = rng(), rv = rng();
         const ui = Math.round(ru * segs), vi2 = Math.round(rv * segs);
         const h = heights[Math.min(vi2, segs)][Math.min(ui, segs)];
-        if (h > 55) continue; // don't place on steep hilltops
+        if (h > 180) continue; // don't place on steep hilltops
         const wx = (ru - 0.5) * G_SIZE * 2;
         const wz = (rv - 0.5) * G_SIZE * 2;
         const tree = makeTree(rng);
@@ -771,9 +779,9 @@ function applyTerrain(data) {
             const idx = i * (s + 1) + j;
             const h = heights[i]?.[j] ?? 0;
             positions.setZ(idx, h);
-            const r = h > 60 ? 0.65 : 0.18;
-            const g = h > 60 ? 0.60 : 0.48;
-            const b2 = h > 60 ? 0.40 : 0.18;
+            const r = h > 200 ? 0.55 : h > 80 ? 0.28 : 0.18;
+            const g = h > 200 ? 0.50 : h > 80 ? 0.52 : 0.48;
+            const b2 = h > 200 ? 0.35 : h > 80 ? 0.22 : 0.18;
             colorArr.push(r, g, b2);
         }
     }
@@ -819,7 +827,7 @@ let enemyElems = []; // HTML overlay elements
 const ENEMY_DEFS = {
     buddy:         { img: 'enemies/buddy.png',         hostile: false, speed: 18,  size: 60, y: 0    },
     fly:           { img: 'enemies/fly.png',           hostile: false, speed: 30,  size: 40, y: 40   },
-    mountainbuddy: { img: 'enemies/mountainbuddy.png', hostile: true,  speed: 28,  size: 70, y: 0, minY: 20 },
+    mountainbuddy: { img: 'enemies/mountainbuddy.png', hostile: true,  speed: 28,  size: 70, y: 0, minY: 120 },
 };
 
 function clearEnemies() {
@@ -836,7 +844,7 @@ function spawnGrasslandsEnemies() {
         const wx = (rng() - 0.5) * G_SIZE * 1.6;
         const wz = (rng() - 0.5) * G_SIZE * 1.6;
         const wy = getTerrainY(wx, wz);
-        if (wy > 20) continue; // plains = low ground
+        if (wy > 60) continue; // plains = low ground
         spawnEnemy('buddy', wx, wy, wz);
     }
     // Flies (valley-loving — spawn anywhere)
@@ -851,7 +859,7 @@ function spawnGrasslandsEnemies() {
         const wx = (rng() - 0.5) * G_SIZE * 1.6;
         const wz = (rng() - 0.5) * G_SIZE * 1.6;
         const wy = getTerrainY(wx, wz);
-        if (wy < 40) continue;
+        if (wy < 150) continue;
         spawnEnemy('mountainbuddy', wx, wy, wz);
     }
 }
@@ -965,8 +973,8 @@ function updateEnemies(dt) {
                 const nextX = enemy.x + (pdx/len) * enemy.def.speed * dt;
                 const nextZ = enemy.z + (pdz/len) * enemy.def.speed * dt;
                 const nextY = getTerrainY(nextX, nextZ);
-                // Mountain buddies refuse to go below Y 20
-                if (nextY >= 20) { enemy.x = nextX; enemy.z = nextZ; }
+                // Mountain buddies refuse to go below Y 120
+                if (nextY >= 120) { enemy.x = nextX; enemy.z = nextZ; }
                 else { enemy.chasing = false; }
             } else {
                 if (Math.random() < 0.008) {
@@ -975,7 +983,7 @@ function updateEnemies(dt) {
                 }
                 const nx = enemy.x + enemy.vx * dt;
                 const nz = enemy.z + enemy.vz * dt;
-                if (getTerrainY(nx, nz) >= 20) { enemy.x = nx; enemy.z = nz; }
+                if (getTerrainY(nx, nz) >= 120) { enemy.x = nx; enemy.z = nz; }
             }
             enemy.y = curY;
         }
@@ -993,14 +1001,26 @@ function updateEnemies(dt) {
 
         // Scale by distance
         const dist = Math.sqrt((enemy.x-pos.x)**2 + (enemy.y-pos.y)**2 + (enemy.z-pos.z)**2);
-        const scale = Math.max(0.2, Math.min(2.5, 600 / (dist + 1)));
+        const scale = Math.max(0.15, Math.min(4.0, 1800 / (dist + 120)));
 
-        if (behind || sx < -200 || sx > W+200 || sy < -200 || sy > H+200 || dist > 1800) {
+        // z-index: closer enemies get higher z so they sort correctly against each other.
+        // Cap at 44 so they never overlap the HUD (z-index 50+), and far ones go lower.
+        const zIdx = Math.max(1, Math.round(44 - (dist / 80)));
+
+        // Hide if behind camera, out of screen, too far, OR if the enemy is
+        // behind terrain/trees — approximate by checking if its projected depth
+        // is deeper than expected (simple distance gate: if dist > 1200 and
+        // enemy is lower than camera, likely behind a hill)
+        const terrainAtEnemy = getTerrainY(enemy.x, enemy.z);
+        const occluded = (enemy.type !== 'fly') && (terrainAtEnemy > pos.y + EYE_H + 10) && (dist > 150);
+
+        if (behind || sx < -200 || sx > W+200 || sy < -200 || sy > H+200 || dist > 1800 || occluded) {
             enemy.el.style.display = 'none';
         } else {
             enemy.el.style.display = 'block';
-            enemy.el.style.left = sx + 'px';
-            enemy.el.style.top  = sy + 'px';
+            enemy.el.style.left      = sx + 'px';
+            enemy.el.style.top       = sy + 'px';
+            enemy.el.style.zIndex    = zIdx;
             enemy.el.style.transform = `translateX(-50%) scale(${scale.toFixed(2)})`;
         }
     });
@@ -1064,10 +1084,10 @@ function update(dt) {
 
     const sinY = Math.sin(yaw), cosY = Math.cos(yaw);
     let dx = 0, dz = 0;
-    if (keys['KeyW']||keys['ArrowUp'])    { dx += sinY; dz -= cosY; }
-    if (keys['KeyS']||keys['ArrowDown'])  { dx -= sinY; dz += cosY; }
-    if (keys['KeyA']||keys['ArrowLeft'])  { dx -= cosY; dz -= sinY; }
-    if (keys['KeyD']||keys['ArrowRight']) { dx += cosY; dz += sinY; }
+    if (keys['KeyW']||keys['ArrowUp'])    { dx -= sinY; dz -= cosY; }
+    if (keys['KeyS']||keys['ArrowDown'])  { dx += sinY; dz += cosY; }
+    if (keys['KeyA']||keys['ArrowLeft'])  { dx -= cosY; dz += sinY; }
+    if (keys['KeyD']||keys['ArrowRight']) { dx += cosY; dz -= sinY; }
 
     const len = Math.sqrt(dx*dx + dz*dz);
     if (len > 0) { dx /= len; dz /= len; }
