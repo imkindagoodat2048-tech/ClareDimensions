@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClareDimensions</title>
+    <style>
+        :root {
+            --bg-color: #0f0f1a;
+            --chat-bg: #1a1a2d;
+            --primary: #4834d4;
+            --danger: #eb4d4b;
+            --text-white: #ffffff;
+            --accent: #a29bfe;
+            --green: #2ed573;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Courier New', monospace;
+            background: var(--bg-color);
+            color: var(--text-white);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ── TOP BAR ── */
+        #top-bar {
+            padding: 6px 12px;
+            background: rgba(26, 26, 45, 0.97);
+            border-bottom: 2px solid var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            z-index: 100;
+            flex-shrink: 0;
+        }
+
+        .bar-left { display: flex; align-items: center; gap: 6px; }
+        .site-title { font-size: 13px; font-weight: bold; color: var(--primary); letter-spacing: 0.05em; }
+        .sep { color: #444; font-size: 12px; }
+
+        .player-tag {
+            font-size: 11px; color: var(--accent);
+            padding: 3px 8px;
+            background: #1a1a2d;
+            border: 1px solid var(--primary);
+            border-radius: 4px;
+            display: flex; align-items: center; gap: 5px;
+        }
+
+        .pfp-mini {
+            width: 16px; height: 16px; border-radius: 3px;
+            object-fit: cover; border: 1px solid var(--primary);
+            flex-shrink: 0;
+        }
+
+        .icon-btn {
+            background: #2f3542; color: white; border: none;
+            border-radius: 4px; padding: 4px 10px; font-size: 11px;
+            cursor: pointer; height: 26px; font-family: inherit;
+            transition: background 0.15s, transform 0.1s;
+        }
+        .icon-btn:hover  { background: #3d4555; }
+        .icon-btn:active { transform: scale(0.92); }
+        .icon-btn.danger { background: var(--danger); }
+
+        /* ── CANVAS ── */
+        #c { flex: 1; display: block; width: 100%; cursor: crosshair; }
+
+        /* ── JOIN SCREEN ── */
+        #join-screen {
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.92);
+            z-index: 200;
+            display: flex; align-items: center; justify-content: center;
+            backdrop-filter: blur(6px);
+        }
+        #join-screen.hidden { display: none !important; }
+
+        .join-box {
+            background: var(--chat-bg); padding: 28px; border-radius: 14px;
+            width: 300px; text-align: center;
+            border: 1px solid var(--primary);
+            box-shadow: 0 0 28px rgba(72,52,212,0.35);
+        }
+
+        .join-box h2 { color: var(--primary); font-size: 24px; margin: 0 0 15px 0; }
+
+        .join-subtitle {
+            color: #888; font-size: 11px; margin-top: 15px; cursor: pointer;
+        }
+
+        .join-box input {
+            width: 100%; background: #0f0f1a; border: 1px solid #333;
+            color: white; border-radius: 8px; padding: 10px;
+            font-size: 12px; outline: none; font-family: inherit;
+            margin-bottom: 10px; box-sizing: border-box;
+        }
+        .join-box input:focus { border-color: var(--primary); }
+
+        .join-box button {
+            width: 100%; padding: 12px; background: var(--primary);
+            border: none; border-radius: 8px; color: white; font-weight: bold;
+            cursor: pointer; font-family: inherit; font-size: 14px;
+            margin-top: 20px; transition: background 0.15s;
+        }
+        .join-box button:hover  { background: #5a43e8; }
+        .join-box button:active { transform: scale(0.97); }
+        .join-box button:disabled { background: #333; color: #666; cursor: not-allowed; }
+
+        /* color picker — shown for guest mode */
+        .color-section { display: none; }
+        .color-section.visible { display: block; }
+        .color-row { display: flex; gap: 8px; justify-content: center; margin: 10px 0 4px; }
+        .cswatch {
+            width: 22px; height: 22px; border-radius: 4px; cursor: pointer;
+            border: 2px solid transparent; transition: transform 0.1s, border-color 0.1s;
+        }
+        .cswatch:hover  { transform: scale(1.2); }
+        .cswatch.active { border-color: white; }
+        .color-label { font-size: 10px; color: #666; margin-bottom: 2px; }
+
+        /* divider */
+        .or-row {
+            display: flex; align-items: center; gap: 8px;
+            margin: 12px 0; color: #444; font-size: 10px;
+        }
+        .or-row hr { flex: 1; border: none; border-top: 1px solid #333; }
+
+        /* error message */
+        #login-err {
+            color: var(--danger); font-size: 10px; min-height: 14px;
+            margin-bottom: 6px; display: none;
+        }
+
+        /* loading spinner */
+        #login-spin {
+            display: none; color: var(--accent); font-size: 10px; margin-bottom: 6px;
+        }
+
+        /* success badge shown after CC login */
+        #cc-badge {
+            display: none;
+            background: #0f0f1a;
+            border: 1px solid var(--green);
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 12px;
+            text-align: left;
+            font-size: 11px;
+        }
+        #cc-badge img {
+            width: 36px; height: 36px; border-radius: 6px;
+            object-fit: cover; border: 1px solid var(--primary);
+            float: left; margin-right: 10px;
+        }
+        #cc-badge .cc-name { color: var(--green); font-weight: bold; }
+        #cc-badge .cc-status { color: #666; font-size: 10px; }
+
+        /* ── CROSSHAIR ── */
+        #crosshair {
+            position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none; z-index: 50;
+            color: rgba(255,255,255,0.65); font-size: 18px; line-height: 1;
+            display: none;
+        }
+
+        /* ── HINT ── */
+        #hint {
+            position: fixed; bottom: 10px; left: 50%;
+            transform: translateX(-50%);
+            font-size: 10px; color: #3a3a4a;
+            pointer-events: none; z-index: 50; letter-spacing: 0.05em;
+            display: none;
+        }
+
+        /* ── LOCK PROMPT ── */
+        #lock-prompt {
+            position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 12px; color: #555;
+            pointer-events: none; z-index: 50;
+            text-align: center; line-height: 1.8;
+            display: none;
+        }
+
+        /* admin tag rainbow */
+        @keyframes rainbow {
+            0%   { color: #ff4757; } 20% { color: #ffa502; }
+            40%  { color: #eccc68; } 60% { color: #2ed573; }
+            80%  { color: #1e90ff; } 100%{ color: #ff4757; }
+        }
+        .admin-tag { animation: rainbow 3s linear infinite; font-size: 9px; margin-left: 2px; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<!-- JOIN SCREEN -->
+<div id="join-screen">
+    <div class="join-box">
+        <h2 id="auth-header">ClareDimensions</h2>
+
+        <div id="cc-badge"></div>
+        <div id="login-spin">⏳ Verifying...</div>
+        <div id="login-err"></div>
+
+        <input type="text"     id="cc-user" placeholder="Username"
+               onkeypress="if(event.key==='Enter') document.getElementById('cc-pass').focus()">
+        <input type="password" id="cc-pass" placeholder="Password"
+               onkeypress="if(event.key==='Enter') ccLogin()">
+
+        <button id="cc-btn" onclick="ccLogin()">Login</button>
+
+        <p class="join-subtitle" onclick="toggleSignUp()" id="toggle-auth-text">New here? Sign Up</p>
+
+        <!-- Sign-up section (hidden by default) -->
+        <div id="signup-section" style="display:none; margin-top:4px;">
+            <input type="text"     id="su-user" placeholder="Username" maxlength="16"
+                   onkeypress="if(event.key==='Enter') document.getElementById('su-pass').focus()">
+            <input type="password" id="su-pass" placeholder="Password"
+                   onkeypress="if(event.key==='Enter') ccSignUp()">
+            <button onclick="ccSignUp()">Sign Up</button>
+        </div>
+
+        <!-- hidden color row still needed for JS -->
+        <div id="color-row" style="display:none;"></div>
+    </div>
+</div>
+
+<!-- TOP BAR -->
+<div id="top-bar">
+    <div class="bar-left">
+        <span class="site-title">🧱 Baseplate</span>
+        <span class="sep">|</span>
+        <span class="player-tag" id="player-label">
+            <img id="pfp-mini" class="pfp-mini" src="https://via.placeholder.com/16" style="display:none;">
+            <span id="player-name">—</span>
+            <span id="adm-tag" class="admin-tag" style="display:none;">[ADM]</span>
+        </span>
+        <span class="sep">|</span>
+        <span class="player-tag" id="online-label">0 online</span>
+    </div>
+    <button class="icon-btn" onclick="leaveGame()">Leave</button>
+</div>
+
+<!-- CANVAS -->
+<canvas id="c"></canvas>
+
+<!-- UI overlays (hidden until in game) -->
+<div id="crosshair">+</div>
+<div id="lock-prompt">Click to look around</div>
+<div id="hint">WASD · MOVE &nbsp;|&nbsp; MOUSE · LOOK &nbsp;|&nbsp; CLICK · LOCK</div>
+
+<!-- Two Firebase apps: ClareCool (verify) + Baseplate (game) -->
+<script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-database-compat.js"></script>
+
+<script>
+// ── FIREBASE: ClareCool (read-only for auth) ──────────────────
+const ccApp = firebase.initializeApp({
+    apiKey:            "AIzaSyB9Rlvq49-AiLBzMDvjz71QCTT4d6NqE98",
+    authDomain:        "mychat-28205.firebaseapp.com",
+    databaseURL:       "https://mychat-28205-default-rtdb.firebaseio.com",
+    projectId:         "mychat-28205",
+    storageBucket:     "mychat-28205.firebasestorage.app",
+    messagingSenderId: "522121848657",
+    appId:             "1:522121848657:web:7108993439310bf6da5570"
+}, "clarecool");
+
+const ccDB = ccApp.database();
+
+// ── FIREBASE: Baseplate (game state) ─────────────────────────
+const bpApp = firebase.initializeApp({
+    apiKey:            "AIzaSyBiCQBzaMtlKu1pUMpNYyCn2wesSci38Hk",
+    authDomain:        "thisisafirebase.firebaseapp.com",
+    databaseURL:       "https://thisisafirebase-default-rtdb.firebaseio.com",
+    projectId:         "thisisafirebase",
+    storageBucket:     "thisisafirebase.firebasestorage.app",
+    messagingSenderId: "869597817002",
+    appId:             "1:869597817002:web:375cb498243ebcfc9f08d3",
+    measurementId:     "G-72PYPCYPRW"
+}, "baseplate");
+
+const db = bpApp.database();
+
+// ── CONSTANTS ────────────────────────────────────────────────
+const GRID_W   = 60;
+const GRID_D   = 60;
+const CELL     = 40;
+const PLAYER_H = 28;
+const SPEED    = 3.2;
+const FOV      = Math.PI / 2.8;
+
+const CC_ADMINS = ["44", "bboy2014", "bartelsfamily5", "hunter"];
+
+// Map ClareCool status → baseplate color
+const STATUS_COLOR_MAP = {
+    'Active':  '#4834d4',
+    'default': '#4834d4'
+};
+const FALLBACK_COLORS = [
+    '#4834d4','#2ed573','#eb4d4b','#ffa502',
+    '#a29bfe','#00cec9','#fdcb6e','#e84393'
+];
+
+// ── STATE ────────────────────────────────────────────────────
+let myId     = null, myName = '', myColor = '#4834d4';
+let myRef    = null, myPfp  = '';
+let isAdmin  = false;
+let otherPlayers = {};
+
+let pos   = { x: 0, z: 0 };
+let yaw   = 0, pitch = 0;
+let keys  = {}, locked = false, lastPush = 0;
+
+// ── GUEST COLOR PICKER ───────────────────────────────────────
+let chosenColor = FALLBACK_COLORS[0];
+const colorRow = document.getElementById('color-row');
+FALLBACK_COLORS.forEach((c, i) => {
+    const s = document.createElement('div');
+    s.className = 'cswatch' + (i === 0 ? ' active' : '');
+    s.style.background = c;
+    s.onclick = () => {
+        chosenColor = c;
+        document.querySelectorAll('.cswatch').forEach(x => x.classList.remove('active'));
+        s.classList.add('active');
+    };
+    colorRow.appendChild(s);
+});
+
+// ── CLARECOOL LOGIN ───────────────────────────────────────────
+async function ccLogin() {
+    const u = document.getElementById('cc-user').value.trim().toLowerCase();
+    const p = document.getElementById('cc-pass').value.trim();
+    if (!u || !p) { showErr('Enter username and password.'); return; }
+
+    setLoading(true);
+    try {
+        const snap = await ccDB.ref('users/' + u).once('value');
+        if (!snap.exists()) { setLoading(false); showErr('User not found.'); return; }
+
+        const data = snap.val();
+        if (data.password !== p) { setLoading(false); showErr('Wrong password.'); return; }
+        if (data.banned)         { setLoading(false); showErr('This account is banned on ClareCool.'); return; }
+
+        setLoading(false);
+
+        // Pull ClareCool profile
+        const pfpUrl   = data.pfp    || '';
+        const status   = data.status || 'Active';
+        const adminTag = CC_ADMINS.includes(u);
+
+        // Pick color: admin gets gold, otherwise purple (ClareCool primary)
+        const color = adminTag ? '#ffa502' : '#4834d4';
+
+        // Show badge
+        showBadge(u, pfpUrl, status, adminTag);
+
+        // Hide login inputs, show enter button
+        document.getElementById('cc-user').style.display = 'none';
+        document.getElementById('cc-pass').style.display = 'none';
+        document.getElementById('cc-btn').innerText = '▶ Play';
+        document.getElementById('cc-btn').onclick = () => launchGame(u, color, pfpUrl, adminTag);
+
+    } catch(e) {
+        setLoading(false);
+        showErr('Connection error. Try again.');
+        console.error(e);
+    }
+}
+
+function showBadge(username, pfp, status, isAdm) {
+    const badge = document.getElementById('cc-badge');
+    badge.style.display = 'block';
+    badge.innerHTML = `
+        ${pfp ? `<img src="${pfp}" onerror="this.style.display='none'">` : ''}
+        <div style="overflow:hidden;">
+            <div class="cc-name">${username}${isAdm ? ' <span style="color:#ffa502; font-size:9px;">[ADM]</span>' : ''}</div>
+            <div class="cc-status">"${status}"</div>
+            <div style="color:#2ed573; font-size:9px; margin-top:2px;">✓ ClareCool verified</div>
+        </div>
+        <div style="clear:both;"></div>
+    `;
+}
+
+function toggleSignUp() {
+    const ss  = document.getElementById('signup-section');
+    const tt  = document.getElementById('toggle-auth-text');
+    const hdr = document.getElementById('auth-header');
+    const open = ss.style.display === 'none';
+    ss.style.display = open ? 'block' : 'none';
+    tt.innerText  = open ? 'Already have an account? Login' : 'New here? Sign Up';
+    hdr.innerText = open ? 'Sign Up' : 'ClareDimensions';
+}
+
+async function ccSignUp() {
+    const u = document.getElementById('su-user').value.trim().toLowerCase();
+    const p = document.getElementById('su-pass').value.trim();
+    if (!u || !p) { showErr('Fill in both fields.'); return; }
+
+    const illegalChars = /[ \(\)\[\]\{\}\<\>\/\\|]/;
+    if (illegalChars.test(u)) { showErr('No spaces or brackets allowed.'); return; }
+
+    setLoading(true);
+    try {
+        const snap = await ccDB.ref('users/' + u).once('value');
+        if (snap.exists()) { setLoading(false); showErr('Username already taken.'); return; }
+
+        await ccDB.ref('users/' + u).set({ password: p, pfp: '', status: 'Active', warned: false, banned: false });
+        setLoading(false);
+
+        // Auto-login after sign up
+        showBadge(u, '', 'Active', false);
+        document.getElementById('signup-section').style.display = 'none';
+        document.getElementById('toggle-auth-text').style.display = 'none';
+        document.getElementById('cc-btn').innerText = '▶ Play';
+        document.getElementById('cc-btn').onclick = () => launchGame(u, '#4834d4', '', false);
+        document.getElementById('cc-btn').style.display = 'block';
+
+    } catch(e) {
+        setLoading(false);
+        showErr('Connection error. Try again.');
+        console.error(e);
+    }
+}
+
+function showErr(msg) {
+    const el = document.getElementById('login-err');
+    el.innerText  = msg;
+    el.style.display = 'block';
+    setTimeout(() => el.style.display = 'none', 3000);
+}
+
+function setLoading(on) {
+    document.getElementById('login-spin').style.display = on ? 'block' : 'none';
+    document.getElementById('cc-btn').disabled = on;
+}
+
+// ── LAUNCH ───────────────────────────────────────────────────
+function launchGame(username, color, pfp, adminFlag) {
+    myName  = username;
+    myColor = color;
+    myPfp   = pfp;
+    isAdmin = adminFlag;
+
+    // Update top bar
+    document.getElementById('player-name').innerText = myName;
+    if (pfp) {
+        const mini = document.getElementById('pfp-mini');
+        mini.src          = pfp;
+        mini.style.display = 'inline-block';
+        mini.onerror      = () => mini.style.display = 'none';
+    }
+    if (isAdmin) document.getElementById('adm-tag').style.display = 'inline';
+
+    // Show overlays
+    document.getElementById('crosshair').style.display  = 'block';
+    document.getElementById('lock-prompt').style.display = 'block';
+    document.getElementById('hint').style.display        = 'block';
+
+    // Spawn position
+    pos.x = (Math.random() - 0.5) * GRID_W * CELL * 0.4;
+    pos.z = (Math.random() - 0.5) * GRID_D * CELL * 0.4;
+
+    // Register in Baseplate DB
+    myRef = db.ref('baseplate_players').push();
+    myId  = myRef.key;
+    myRef.set({
+        name:    myName,
+        color:   myColor,
+        pfp:     myPfp,
+        isAdmin: isAdmin,
+        x:       pos.x,
+        z:       pos.z,
+        yaw:     0
+    });
+    myRef.onDisconnect().remove();
+
+    // Listen to others
+    db.ref('baseplate_players').on('value', snap => {
+        otherPlayers = {};
+        snap.forEach(child => {
+            if (child.key !== myId) otherPlayers[child.key] = child.val();
+        });
+        document.getElementById('online-label').innerText =
+            (Object.keys(otherPlayers).length + 1) + ' online';
+    });
+
+    document.getElementById('join-screen').classList.add('hidden');
+    loop();
+}
+
+function leaveGame() {
+    if (myRef) myRef.remove();
+    location.reload();
+}
+
+// ── CANVAS ───────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+function resize() { canvas.width = canvas.clientWidth; canvas.height = canvas.clientHeight; }
+resize();
+window.addEventListener('resize', resize);
+
+// ── CONTROLS ────────────────────────────────────────────────
+document.addEventListener('keydown', e => { keys[e.code] = true; if(e.code==='Space') e.preventDefault(); });
+document.addEventListener('keyup',   e => { keys[e.code] = false; });
+
+canvas.addEventListener('click', () => { if (myId) canvas.requestPointerLock(); });
+
+document.addEventListener('pointerlockchange', () => {
+    locked = document.pointerLockElement === canvas;
+    document.getElementById('lock-prompt').style.display = (myId && !locked) ? 'block' : 'none';
+});
+
+document.addEventListener('mousemove', e => {
+    if (!locked) return;
+    yaw   += e.movementX * 0.002;
+    pitch -= e.movementY * 0.002;
+    pitch  = Math.max(-1.1, Math.min(1.1, pitch));
+});
+
+// ── UPDATE ───────────────────────────────────────────────────
+function update() {
+    if (!myId) return;
+    const sinY = Math.sin(yaw), cosY = Math.cos(yaw);
+    let dx = 0, dz = 0;
+    if (keys['KeyW']||keys['ArrowUp'])    { dx += sinY; dz -= cosY; }
+    if (keys['KeyS']||keys['ArrowDown'])  { dx -= sinY; dz += cosY; }
+    if (keys['KeyA']||keys['ArrowLeft'])  { dx -= cosY; dz -= sinY; }
+    if (keys['KeyD']||keys['ArrowRight']) { dx += cosY; dz += sinY; }
+    const len = Math.sqrt(dx*dx+dz*dz);
+    if (len > 0) { dx /= len; dz /= len; }
+    pos.x += dx * SPEED;
+    pos.z += dz * SPEED;
+    const hw = (GRID_W/2)*CELL-1, hd = (GRID_D/2)*CELL-1;
+    pos.x = Math.max(-hw, Math.min(hw, pos.x));
+    pos.z = Math.max(-hd, Math.min(hd, pos.z));
+    const now = Date.now();
+    if (myRef && now - lastPush > 80) {
+        myRef.update({ x: pos.x, z: pos.z, yaw });
+        lastPush = now;
+    }
+}
+
+// ── DRAW ────────────────────────────────────────────────────
+function draw() {
+    const W = canvas.width, H = canvas.height;
+    const fovF    = W / (2 * Math.tan(FOV / 2));
+    const horizonY = (H >> 1) + Math.round(pitch * fovF);
+
+    // Sky
+    ctx.fillStyle = '#08080f';
+    ctx.fillRect(0, 0, W, horizonY);
+
+    // Floor scanlines
+    const sinYaw = Math.sin(yaw), cosYaw = Math.cos(yaw);
+    const planeX =  cosYaw * Math.tan(FOV / 2);
+    const planeZ =  sinYaw * Math.tan(FOV / 2);
+
+    for (let sy = Math.max(horizonY, 0); sy < H; sy++) {
+        const p = sy - horizonY;
+        if (p === 0) continue;
+        const rowDist = (PLAYER_H * H) / (2.0 * p);
+        const stepX   = (2.0 * rowDist * planeX) / W;
+        const stepZ   = (2.0 * rowDist * planeZ) / W;
+        let fx = pos.x + rowDist * sinYaw - (W/2) * stepX;
+        let fz = pos.z - rowDist * cosYaw - (W/2) * stepZ;
+        const shade = Math.max(0.06, Math.min(1.0, 1.0 - rowDist / 1400));
+
+        for (let x = 0; x < W; x++) {
+            const cx2 = Math.floor(fx / CELL);
+            const cz2 = Math.floor(fz / CELL);
+            const hw   = GRID_W >> 1, hd = GRID_D >> 1;
+            const inB  = cx2 >= -hw && cx2 < hw && cz2 >= -hd && cz2 < hd;
+            let r, g, b;
+            if (!inB) {
+                r=5; g=5; b=9;
+            } else {
+                const even = (((cx2%2)+2)%2) ^ (((cz2%2)+2)%2);
+                if (even) { r=Math.round(28*shade); g=Math.round(22*shade); b=Math.round(75*shade); }
+                else      { r=Math.round(18*shade); g=Math.round(14*shade); b=Math.round(50*shade); }
+            }
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.fillRect(x, sy, 1, 1);
+            fx += stepX; fz += stepZ;
+        }
+    }
+
+    // Horizon fog
+    if (horizonY > 0 && horizonY < H) {
+        const fg = ctx.createLinearGradient(0, horizonY-18, 0, horizonY+18);
+        fg.addColorStop(0, 'rgba(8,8,15,1)');
+        fg.addColorStop(0.45, 'rgba(8,8,15,0)');
+        fg.addColorStop(1, 'rgba(8,8,15,0)');
+        ctx.fillStyle = fg;
+        ctx.fillRect(0, horizonY-18, W, 36);
+    }
+
+    // ── Billboard players ──────────────────────────────────
+    const sprites = [];
+    for (const id in otherPlayers) {
+        const p  = otherPlayers[id];
+        const dx = p.x - pos.x, dz = p.z - pos.z;
+        const camX =  cosYaw * dx + sinYaw * dz;
+        const camZ = -sinYaw * dx + cosYaw * dz;
+        if (camZ < 0.5) continue;
+        sprites.push({
+            x:     (W/2) + (camX/camZ) * fovF,
+            baseY: horizonY + PLAYER_H * fovF / camZ,
+            w:     Math.abs(fovF * CELL / camZ) * 0.65,
+            h:     Math.abs(fovF * CELL / camZ),
+            dist:  Math.sqrt(dx*dx+dz*dz),
+            camZ,
+            color:   p.color   || '#4834d4',
+            name:    p.name    || '?',
+            pfp:     p.pfp     || '',
+            isAdmin: p.isAdmin || false
+        });
+    }
+    sprites.sort((a,b) => b.dist - a.dist);
+
+    // Cache PFP images
+    if (!window._pfpCache) window._pfpCache = {};
+
+    for (const s of sprites) {
+        if (s.dist > 2500) continue;
+        const fade = Math.max(0, Math.min(1, 1 - s.dist / 1800));
+        const top  = s.baseY - s.h;
+
+        ctx.save();
+        ctx.globalAlpha = fade;
+
+        // Body
+        ctx.fillStyle = s.color;
+        ctx.fillRect(s.x - s.w/2, top, s.w, s.h);
+
+        // If they have a PFP, render it as a texture on the face
+        if (s.pfp && s.dist < 600) {
+            if (!window._pfpCache[s.pfp]) {
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.src = s.pfp;
+                window._pfpCache[s.pfp] = img;
+            }
+            const img = window._pfpCache[s.pfp];
+            if (img.complete && img.naturalWidth > 0) {
+                ctx.save();
+                ctx.globalAlpha = fade * Math.max(0, 1 - s.dist / 600);
+                // Clip to body rect
+                ctx.beginPath();
+                ctx.rect(s.x - s.w/2, top, s.w, s.h);
+                ctx.clip();
+                ctx.drawImage(img, s.x - s.w/2, top, s.w, s.h);
+                ctx.restore();
+            }
+        } else {
+            // Default face detail
+            ctx.fillStyle = 'rgba(0,0,0,0.22)';
+            ctx.fillRect(s.x - s.w/2+2, top+2, s.w-4, s.h*0.45);
+            const ew = Math.max(1, s.w*0.11);
+            const ey = top + s.h*0.14;
+            ctx.fillStyle = 'white';
+            ctx.fillRect(s.x - s.w*0.22, ey, ew, ew);
+            ctx.fillRect(s.x + s.w*0.11, ey, ew, ew);
+        }
+
+        // Admin glow outline
+        if (s.isAdmin) {
+            ctx.strokeStyle = '#ffa502';
+            ctx.lineWidth   = Math.max(1, s.w * 0.06);
+            ctx.strokeRect(s.x - s.w/2, top, s.w, s.h);
+        }
+
+        // Nametag
+        if (s.dist < 750) {
+            const tf = Math.max(0, 1 - s.dist/750);
+            ctx.globalAlpha = tf * fade;
+            const fs = Math.max(9, Math.round(s.w * 0.52));
+            ctx.font      = `bold ${fs}px Courier New`;
+            ctx.textAlign = 'center';
+            const label = s.name + (s.isAdmin ? ' ★' : '');
+            const tw    = ctx.measureText(label).width;
+            ctx.fillStyle = 'rgba(10,10,20,0.8)';
+            ctx.fillRect(s.x - tw/2 - 5, top - fs - 9, tw + 10, fs + 5);
+            ctx.fillStyle = s.isAdmin ? '#ffa502' : '#a29bfe';
+            ctx.fillText(label, s.x, top - 6);
+        }
+
+        ctx.restore();
+    }
+
+    // Vignette
+    const vg = ctx.createRadialGradient(W/2, H/2, H*0.25, W/2, H/2, H*0.8);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.5)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0,0,W,H);
+}
+
+// ── LOOP ────────────────────────────────────────────────────
+function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
