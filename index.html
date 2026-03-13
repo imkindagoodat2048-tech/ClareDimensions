@@ -623,9 +623,12 @@ function enterGrasslands() {
     pos.x = 0; pos.z = G_SIZE - 200; pos.y = getTerrainY(pos.x, pos.z);
     grassCamera.position.set(pos.x, pos.y + EYE_H, pos.z);
 
-    // Load terrain from Firebase
-    db.ref('cd_grasslands_terrain').once('value', snap => {
-        if (snap.exists()) applyTerrain(snap.val());
+    // Live terrain sync — updates for everyone when bartelsfamily5 generates
+    db.ref('cd_grasslands_terrain').on('value', snap => {
+        if (snap.exists()) {
+            applyTerrain(snap.val());
+            spawnGrasslandsEnemies();
+        }
     });
 
     // Spawn enemies
@@ -1001,7 +1004,7 @@ function updateEnemies(dt) {
 
         // Scale by distance
         const dist = Math.sqrt((enemy.x-pos.x)**2 + (enemy.y-pos.y)**2 + (enemy.z-pos.z)**2);
-        const scale = Math.max(0.15, Math.min(4.0, 1800 / (dist + 120)));
+        const scale = Math.max(0.2, Math.min(2.5, 600 / (dist + 1)));
 
         // z-index: closer enemies get higher z so they sort correctly against each other.
         // Cap at 44 so they never overlap the HUD (z-index 50+), and far ones go lower.
