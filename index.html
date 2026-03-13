@@ -257,7 +257,7 @@ const db = bpApp.database();
 // ════════════════════════════════════════════════
 const CC_ADMINS      = ["44","bboy2014","bartelsfamily5","hunter"];
 const FALLBACK_COLORS = ['#4834d4','#2ed573','#eb4d4b','#ffa502','#a29bfe','#00cec9','#fdcb6e','#e84393'];
-const SPEED          = 180;   // world units per second
+const SPEED          = 500;   // world units per second
 const EYE_H          = 55;    // camera eye height
 const HUB_R          = 400;   // hub radius
 const G_SIZE         = 3000;  // grasslands half-size
@@ -898,9 +898,9 @@ function makeTree(rng) {
 const enemies = [];
 let enemyElems = []; // kept for clearEnemies compat, unused now
 const ENEMY_DEFS = {
-    buddy:         { img: 'enemies/buddy.png',         hostile: false, speed: 18,  size: 80,  y: 0,   minY: 0   },
-    fly:           { img: 'enemies/fly.png',           hostile: false, speed: 30,  size: 55,  y: 40,  minY: 0   },
-    mountainbuddy: { img: 'enemies/mountainbuddy.png', hostile: true,  speed: 28,  size: 90,  y: 0,   minY: 120 },
+    buddy:         { img: 'enemies/buddy.png',         hostile: false, speed: 80,   size: 80,  y: 0,   minY: 0   },
+    fly:           { img: 'enemies/fly.png',           hostile: false, speed: 120,  size: 55,  y: 40,  minY: 0   },
+    mountainbuddy: { img: 'enemies/mountainbuddy.png', hostile: true,  speed: 140,  size: 90,  y: 0,   minY: 120 },
 };
 
 // Texture cache
@@ -996,9 +996,7 @@ function spawnEnemy(type, wx, wy, wz) {
         sprite.scale.set(def.size, def.size, 1);
         sprite.position.set(enemy.x, enemy.y + def.size * 0.5, enemy.z);
         sprite.userData.enemyType = type;
-        if (type === 'buddy') {
-            sprite.userData.clickable = true;
-        }
+        sprite.userData.clickable = true;
         grassScene.add(sprite);
         enemy.sprite = sprite;
     });
@@ -1012,12 +1010,35 @@ const _raycaster = new THREE.Raycaster();
 const _mouse     = new THREE.Vector2();
 wrap.addEventListener('click', () => {
     if (currentDim !== 'grasslands' || !locked) return;
-    _mouse.set(0, 0); // centre of screen (crosshair)
+    _mouse.set(0, 0);
     _raycaster.setFromCamera(_mouse, grassCamera);
     const spriteObjs = enemies.filter(e => e.sprite).map(e => e.sprite);
     const hits = _raycaster.intersectObjects(spriteObjs);
-    if (hits.length > 0 && hits[0].object.userData.enemyType === 'buddy') {
+    if (hits.length === 0) return;
+
+    const hit     = hits[0].object;
+    const enemy   = enemies.find(e => e.sprite === hit);
+    if (!enemy) return;
+
+    if (enemy.type === 'buddy') {
         showPetNotif('🐾 You petted a Buddy! It loves you!');
+
+    } else if (enemy.type === 'mountainbuddy') {
+        if (enemy.tamed) {
+            showPetNotif('💙 Your Mountain Buddy nuzzles you!');
+            return;
+        }
+        // 1/10 chance to tame
+        if (Math.random() < 0.1) {
+            enemy.tamed   = true;
+            enemy.chasing = false;
+            // Blue tint on the sprite
+            if (enemy.sprite) enemy.sprite.material.color.set(0x88bbff);
+            showPetNotif('💙 The Mountain Buddy trusts you! It will follow you now.');
+        } else {
+            showPetNotif('😤 The Mountain Buddy swatted you away!');
+            showMBDamage();
+        }
     }
 });
 
@@ -1067,24 +1088,42 @@ function updateEnemies(dt) {
             const pdx = pos.x - enemy.x, pdz = pos.z - enemy.z;
             const pdist = Math.sqrt(pdx*pdx + pdz*pdz);
             const curY = getTerrainY(enemy.x, enemy.z);
-            if (pdist < 250 && curY >= enemy.def.minY) enemy.chasing = true;
-            else if (pdist > 400) enemy.chasing = false;
-            if (enemy.chasing) {
-                const len = Math.sqrt(pdx*pdx + pdz*pdz) || 1;
-                const nextX = enemy.x + (pdx/len) * enemy.def.speed * dt;
-                const nextZ = enemy.z + (pdz/len) * enemy.def.speed * dt;
-                if (getTerrainY(nextX, nextZ) >= 120) { enemy.x = nextX; enemy.z = nextZ; }
-                else enemy.chasing = false;
-            } else {
-                if (Math.random() < 0.008) {
-                    enemy.vx = (Math.random() - 0.5) * enemy.def.speed * 0.5;
-                    enemy.vz = (Math.random() - 0.5) * enemy.def.speed * 0.5;
+
+            if (enemy.tamed) {
+                // Follow player at a comfortable distance, no terrain restriction
+                if (pdist > 120) {
+                    const len = pdist || 1;
+                    enemy.x += (pdx/len) * enemy.def.speed * dt;
+                    enemy.z += (pdz/len) * enemy.def.speed * dt;
                 }
-                const nx = enemy.x + enemy.vx * dt;
-                const nz = enemy.z + enemy.vz * dt;
-                if (getTerrainY(nx, nz) >= 120) { enemy.x = nx; enemy.z = nz; }
+                enemy.y = getTerrainY(enemy.x, enemy.z);
+            } else {
+                if (pdist < 250 && curY >= enemy.def.minY) enemy.chasing = true;
+                else if (pdist > 400) enemy.chasing = false;
+                if (enemy.chasing) {
+                    const len = Math.sqrt(pdx*pdx + pdz*pdz) || 1;
+                    const nextX = enemy.x + (pdx/len) * enemy.def.speed * dt;
+                    const nextZ = enemy.z + (pdz/len) * enemy.def.speed * dt;
+                    if (getTerrainY(nextX, nextZ) >= 120) { enemy.x = nextX; enemy.z = nextZ; }
+                    else enemy.chasing = false;
+
+                    // Damage player on contact (within 80 units), 2s cooldown
+                    const now2 = Date.now();
+                    if (pdist < 80 && (!enemy.lastHit || now2 - enemy.lastHit > 2000)) {
+                        enemy.lastHit = now2;
+                        showMBDamage();
+                    }
+                } else {
+                    if (Math.random() < 0.008) {
+                        enemy.vx = (Math.random() - 0.5) * enemy.def.speed * 0.5;
+                        enemy.vz = (Math.random() - 0.5) * enemy.def.speed * 0.5;
+                    }
+                    const nx = enemy.x + enemy.vx * dt;
+                    const nz = enemy.z + enemy.vz * dt;
+                    if (getTerrainY(nx, nz) >= 120) { enemy.x = nx; enemy.z = nz; }
+                }
+                enemy.y = getTerrainY(enemy.x, enemy.z);
             }
-            enemy.y = getTerrainY(enemy.x, enemy.z);
         }
 
         if (enemy.type !== 'fly') enemy.y = getTerrainY(enemy.x, enemy.z);
@@ -1294,6 +1333,15 @@ function showPetNotif(msg) {
     el.innerText = msg; el.style.display = 'block';
     clearTimeout(petNotifTimer);
     petNotifTimer = setTimeout(() => el.style.display = 'none', 2500);
+}
+
+function showMBDamage() {
+    showPetNotif('💥 A Mountain Buddy hit you!');
+    // Red flash overlay
+    const flash = document.createElement('div');
+    flash.style.cssText = 'position:fixed;inset:0;background:rgba(235,77,75,0.35);pointer-events:none;z-index:9000;';
+    document.body.appendChild(flash);
+    setTimeout(() => flash.remove(), 200);
 }
 </script>
 </body>
