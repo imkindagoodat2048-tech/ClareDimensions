@@ -257,10 +257,10 @@ const db = bpApp.database();
 // ════════════════════════════════════════════════
 const CC_ADMINS      = ["44","bboy2014","bartelsfamily5","hunter"];
 const FALLBACK_COLORS = ['#4834d4','#2ed573','#eb4d4b','#ffa502','#a29bfe','#00cec9','#fdcb6e','#e84393'];
-const SPEED          = 500;   // world units per second
+const SPEED          = 1200;  // world units per second
 const EYE_H          = 55;    // camera eye height
 const HUB_R          = 400;   // hub radius
-const G_SIZE         = 3000;  // grasslands half-size
+const G_SIZE         = 9000;  // grasslands half-size
 
 // ════════════════════════════════════════════════
 // STATE
@@ -685,26 +685,45 @@ function generateGrasslands() {
     const segs = TERRAIN_SEGS;
     const heights = [];
 
-    // ── Step 1: Place biome zone centres ──────────────────────
-    // 3-4 Valley+Mountain complexes (always adjacent — mountain rings valley)
-    // Rest of map is Plains
-    const biomeZones = []; // { type: 'valley'|'mountain'|'plains', cx, cz, r, strength }
+    // ── Step 1: Place biome complexes ─────────────────────────
+    // Guaranteed layout: place complexes in a grid of 3x3 slots so they
+    // can't all clump together. Slots are 0.33 wide in UV space.
+    // We guarantee at least 1 valley complex, 1 mountain complex, rest plains.
+    const biomeZones = [];
 
-    const numComplexes = 3 + Math.floor(rng() * 2); // 3 or 4
-    for (let b = 0; b < numComplexes; b++) {
-        // Place complex away from map edge and from other complexes
-        const cx = 0.15 + rng() * 0.7;
-        const cz = 0.15 + rng() * 0.7;
-        const valleyR  = 0.08 + rng() * 0.07;  // valley core
-        const mountainR = valleyR + 0.05 + rng() * 0.05; // mountain ring around it
-
-        biomeZones.push({ type: 'valley',   cx, cz, r: valleyR,   depth:  -(120 + rng() * 100) });
-        biomeZones.push({ type: 'mountain', cx, cz, r: mountainR, height:  (200 + rng() * 180) });
+    // Fixed guaranteed slots spread across the map
+    const guaranteedComplexes = [
+        { u: 0.20, v: 0.25 },
+        { u: 0.75, v: 0.20 },
+        { u: 0.50, v: 0.70 },
+        { u: 0.25, v: 0.75 },
+    ];
+    // Add 1-2 extra random ones
+    const extraCount = 1 + Math.floor(rng() * 2);
+    for (let i = 0; i < extraCount; i++) {
+        guaranteedComplexes.push({ u: 0.1 + rng() * 0.8, v: 0.1 + rng() * 0.8 });
     }
 
+    guaranteedComplexes.forEach((slot, i) => {
+        // Jitter slightly within slot
+        const cx = Math.max(0.12, Math.min(0.88, slot.u + (rng() - 0.5) * 0.08));
+        const cz = Math.max(0.12, Math.min(0.88, slot.v + (rng() - 0.5) * 0.08));
+
+        // Valley radius is generous — deep bowl
+        const valleyR   = 0.07 + rng() * 0.06;
+        // Mountain ring starts OUTSIDE the valley and doesn't overlap its centre
+        const gapR      = valleyR + 0.02;              // small gap between valley edge and mountain start
+        const mountainR = gapR   + 0.06 + rng() * 0.05;
+
+        const depth  = -(150 + rng() * 130);
+        const height =  (220 + rng() * 160);
+
+        biomeZones.push({ type: 'valley',   cx, cz, innerR: 0,      outerR: valleyR,   depth,  height: 0      });
+        biomeZones.push({ type: 'mountain', cx, cz, innerR: gapR,   outerR: mountainR, depth:0, height         });
+    });
+
     // ── Step 2: Build height map ────────────────────────────────
-    // Also store biome type per vertex for enemy spawning
-    const biomeGrid = []; // 'plains' | 'valley' | 'mountain'
+    const biomeGrid = [];
 
     for (let vi = 0; vi <= segs; vi++) {
         heights.push([]);
@@ -714,53 +733,57 @@ function generateGrasslands() {
             const wx2 = (u - 0.5) * G_SIZE * 2;
             const wz2 = (v - 0.5) * G_SIZE * 2;
 
-            // Tiny plains noise — subtle bumps everywhere as base
-            const freq = 1 / 400;
+            const freq = 1 / 1200; // scaled to bigger map
             const plainsBump = (
                 Math.sin(wx2 * freq * 1.3 + 0.3) * Math.cos(wz2 * freq * 0.9) +
                 Math.sin(wx2 * freq * 2.8 + 1.1) * Math.cos(wz2 * freq * 2.1 + 0.7)
-            ) * 10; // max ~20 units — tiny bumps
+            ) * 12;
 
-            // Evaluate each biome zone's influence
-            let valleyInfluence  = 0, valleyDepth  = 0;
+            // Each zone uses an annular influence: 0 inside innerR gap, rises to 1 at outerR
+            let valleyInfluence  = 0, valleyDepth   = 0;
             let mountainInfluence = 0, mountainHeight = 0;
 
             biomeZones.forEach(zone => {
-                const du = u - zone.cx, dv = v - zone.cz;
+                const du   = u - zone.cx, dv = v - zone.cz;
                 const dist = Math.sqrt(du*du + dv*dv);
-                const t = Math.max(0, 1 - dist / zone.r); // 0..1, smooth
-                const tSmooth = t * t * (3 - 2 * t); // smoothstep
 
-                if (zone.type === 'valley' && tSmooth > valleyInfluence) {
-                    valleyInfluence = tSmooth;
-                    valleyDepth     = zone.depth;
-                }
-                if (zone.type === 'mountain' && tSmooth > mountainInfluence) {
-                    mountainInfluence = tSmooth;
-                    mountainHeight    = zone.height;
+                if (zone.type === 'valley') {
+                    // Valley fills inward from outerR to 0
+                    if (dist <= zone.outerR) {
+                        const t = 1 - dist / zone.outerR;
+                        const ts = t * t * (3 - 2 * t);
+                        if (ts > valleyInfluence) { valleyInfluence = ts; valleyDepth = zone.depth; }
+                    }
+                } else {
+                    // Mountain is a ring: only influences between innerR and outerR
+                    if (dist >= zone.innerR && dist <= zone.outerR) {
+                        const span = zone.outerR - zone.innerR;
+                        const t    = 1 - (dist - zone.innerR) / span;
+                        const ts   = t * t * (3 - 2 * t);
+                        if (ts > mountainInfluence) { mountainInfluence = ts; mountainHeight = zone.height; }
+                    }
                 }
             });
 
-            // Mountains win over valleys at the same location (ring outside valley)
-            // Valley sinks the terrain below 0, mountains push it up
-            let h = plainsBump; // base is plains
+            let h = plainsBump;
 
-            if (mountainInfluence > 0 && mountainInfluence >= valleyInfluence) {
-                // Pointy ridgeline — add some per-vertex noise for rugged peaks
-                const ridgeNoise = Math.sin(wx2 * freq * 4.1 + 2.3) * Math.cos(wz2 * freq * 3.7 + 1.1) * 40;
+            if (valleyInfluence > 0 && valleyInfluence >= mountainInfluence) {
+                h = plainsBump * (1 - valleyInfluence) + valleyDepth * valleyInfluence;
+            } else if (mountainInfluence > 0) {
+                const ridgeNoise = Math.sin(wx2 * freq * 4.1 + 2.3) * Math.cos(wz2 * freq * 3.7 + 1.1) * 50;
                 h = plainsBump * (1 - mountainInfluence) + (mountainHeight + ridgeNoise) * mountainInfluence;
-            } else if (valleyInfluence > 0) {
-                // Valley floor — keep it somewhat flat at the bottom
-                const valleyFloor = valleyDepth * valleyInfluence;
-                h = plainsBump * (1 - valleyInfluence) + valleyFloor;
             }
 
-            // Terrain minimum is -280 (deep valleys), no hard floor so valleys feel deep
-            heights[vi].push(Math.max(-280, h));
-            // Tag biome
-            if (mountainInfluence > 0.35 && mountainInfluence >= valleyInfluence) biomeGrid[vi].push('mountain');
-            else if (valleyInfluence > 0.35) biomeGrid[vi].push('valley');
-            else biomeGrid[vi].push('plains');
+            heights[vi].push(Math.max(-320, h));
+
+            // Biome tag — lower thresholds so valleys actually get tagged
+            if (valleyInfluence >= mountainInfluence && valleyInfluence > 0.20) {
+                biomeGrid[vi].push('valley');
+            } else if (mountainInfluence > 0.20) {
+                biomeGrid[vi].push('mountain');
+            } else {
+                biomeGrid[vi].push('plains');
+            }
         }
     }
 
@@ -898,9 +921,9 @@ function makeTree(rng) {
 const enemies = [];
 let enemyElems = []; // kept for clearEnemies compat, unused now
 const ENEMY_DEFS = {
-    buddy:         { img: 'enemies/buddy.png',         hostile: false, speed: 80,   size: 80,  y: 0,   minY: 0   },
-    fly:           { img: 'enemies/fly.png',           hostile: false, speed: 120,  size: 55,  y: 40,  minY: 0   },
-    mountainbuddy: { img: 'enemies/mountainbuddy.png', hostile: true,  speed: 140,  size: 90,  y: 0,   minY: 120 },
+    buddy:         { img: 'enemies/buddy.png',         hostile: false, speed: 200,  size: 80,  y: 0,   minY: 0   },
+    fly:           { img: 'enemies/fly.png',           hostile: false, speed: 280,  size: 55,  y: 40,  minY: 0   },
+    mountainbuddy: { img: 'enemies/mountainbuddy.png', hostile: true,  speed: 320,  size: 90,  y: 0,   minY: 120 },
 };
 
 // Texture cache
@@ -972,7 +995,7 @@ function spawnGrasslandsEnemies() {
         const wz = (rng() - 0.5) * G_SIZE * 1.8;
         if (getBiome(wx, wz) !== 'mountain') continue;
         const wy = getTerrainY(wx, wz);
-        if (wy < 120) continue;
+        if (wy < 80) continue;
         spawnEnemy('mountainbuddy', wx, wy, wz);
         mbCount++;
     }
@@ -1025,7 +1048,7 @@ wrap.addEventListener('click', () => {
 
     } else if (enemy.type === 'mountainbuddy') {
         if (enemy.tamed) {
-            showPetNotif('💙 You petted your pet Mountain Buddy! It loves you!');
+            showPetNotif('💙 Your Mountain Buddy nuzzles you!');
             return;
         }
         // 1/10 chance to tame
@@ -1062,8 +1085,8 @@ function updateEnemies(dt) {
             if (enemy.circling) {
                 enemy.circleTimer -= dt;
                 enemy.circleAngle += dt * 1.8;
-                enemy.x = pos.x + Math.cos(enemy.circleAngle) * 80;
-                enemy.z = pos.z + Math.sin(enemy.circleAngle) * 80;
+                enemy.x = pos.x + Math.cos(enemy.circleAngle) * 250;
+                enemy.z = pos.z + Math.sin(enemy.circleAngle) * 250;
                 enemy.y = pos.y + EYE_H * 0.5 + Math.sin(enemy.circleAngle * 2) * 10;
                 if (enemy.circleTimer <= 0) {
                     enemy.circling = false;
@@ -1071,7 +1094,7 @@ function updateEnemies(dt) {
                     enemy.vz = (Math.random() - 0.5) * enemy.def.speed;
                 }
             } else {
-                if (pdist < 200 && Math.random() < 0.005) {
+                if (pdist < 600 && Math.random() < 0.005) {
                     enemy.circling = true;
                     enemy.circleTimer = 5 + Math.random() * 1;
                     enemy.circleAngle = Math.atan2(enemy.z - pos.z, enemy.x - pos.x);
@@ -1091,15 +1114,15 @@ function updateEnemies(dt) {
 
             if (enemy.tamed) {
                 // Follow player at a comfortable distance, no terrain restriction
-                if (pdist > 120) {
+                if (pdist > 400) {
                     const len = pdist || 1;
                     enemy.x += (pdx/len) * enemy.def.speed * dt;
                     enemy.z += (pdz/len) * enemy.def.speed * dt;
                 }
                 enemy.y = getTerrainY(enemy.x, enemy.z);
             } else {
-                if (pdist < 250 && curY >= enemy.def.minY) enemy.chasing = true;
-                else if (pdist > 400) enemy.chasing = false;
+                if (pdist < 700 && curY >= enemy.def.minY) enemy.chasing = true;
+                else if (pdist > 1200) enemy.chasing = false;
                 if (enemy.chasing) {
                     const len = Math.sqrt(pdx*pdx + pdz*pdz) || 1;
                     const nextX = enemy.x + (pdx/len) * enemy.def.speed * dt;
@@ -1107,9 +1130,8 @@ function updateEnemies(dt) {
                     if (getTerrainY(nextX, nextZ) >= 120) { enemy.x = nextX; enemy.z = nextZ; }
                     else enemy.chasing = false;
 
-                    // Damage player on contact (within 80 units), 2s cooldown
                     const now2 = Date.now();
-                    if (pdist < 80 && (!enemy.lastHit || now2 - enemy.lastHit > 2000)) {
+                    if (pdist < 200 && (!enemy.lastHit || now2 - enemy.lastHit > 2000)) {
                         enemy.lastHit = now2;
                         showMBDamage();
                     }
