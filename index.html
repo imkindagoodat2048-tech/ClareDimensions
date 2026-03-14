@@ -1124,7 +1124,7 @@ wrap.addEventListener('click', () => {
 
     } else if (enemy.type === 'mountainbuddy') {
         if (enemy.tamed) {
-            showPetNotif('💙 Your Mountain Buddy loves you!');
+            showPetNotif('💙 Your Mountain Buddy nuzzles you!');
             return;
         }
         // 1/10 chance to tame
@@ -2363,7 +2363,7 @@ const GT_ENEMY_DEFS = {
     spiderRed:   {img:'enemies/giantspider.png',  size:55,  speed:GT_SPEED*0.75, dmg:15, hostile:true,  tint:0xff3333},
     statue:      {img:'enemies/statue.png',       size:70,  speed:GT_SPEED*3,    dmg:30, hostile:true,  tint:null},
     falseBuddy:  {img:'enemies/notbuddy.png',     size:75,  speed:GT_SPEED*1.5,  dmg:25, hostile:true,  tint:null},
-    megaSpider:  {img:'enemies/giantspider.png',  size:340, speed:GT_SPEED*0.75, dmg:75, hostile:true,  tint:0x220000},
+    megaSpider:  {img:'enemies/giantspider.png',  size:340, speed:GT_SPEED*0.75, dmg:75, hostile:true,  tint:null},
     peepingTom:  {img:'enemies/peepingtom.png',   size:80,  speed:0,             dmg:0,  hostile:false, tint:null},
 };
 let peepingTomActive = false;
@@ -2384,13 +2384,13 @@ function spawnGTEnemies() {
         spawnGTEnemy(spiderType, Math.cos(angle)*r, Math.sin(angle)*r);
     }
 
-    // Statues
+    // Statues — max 2 at a time
     if (w==='day') {
         if (rng()<0.3) spawnGTEnemy('statue', (rng()-0.5)*TOWN_R*0.8, (rng()-0.5)*TOWN_R*0.8);
     } else if (w==='night') {
-        for(let i=0;i<5;i++) spawnGTEnemy('statue',(rng()-0.5)*TOWN_R*1.2,(rng()-0.5)*TOWN_R*1.2);
+        for(let i=0;i<2;i++) spawnGTEnemy('statue',(rng()-0.5)*TOWN_R*1.2,(rng()-0.5)*TOWN_R*1.2);
     } else if (w==='reckoning') {
-        for(let i=0;i<10;i++) spawnGTEnemy('statue',(rng()-0.5)*TOWN_R*1.5,(rng()-0.5)*TOWN_R*1.5);
+        for(let i=0;i<2;i++) spawnGTEnemy('statue',(rng()-0.5)*TOWN_R*1.5,(rng()-0.5)*TOWN_R*1.5);
     }
 
     // False Buddy — always in Dark Place (beyond MOUNTAIN_R), PLUS town during Reckoning
@@ -2407,8 +2407,9 @@ function spawnGTEnemies() {
 
     // Mega Spider — one, deep in the Dark Place
     {
-        const angle=rng()*Math.PI*2, r=MOUNTAIN_R+1200+rng()*1800;
-        spawnGTEnemy('megaSpider', Math.cos(angle)*r, Math.sin(angle)*r);
+        const angle=rng()*Math.PI*2, r=MOUNTAIN_R+800+rng()*2000;
+        const mx = Math.cos(angle)*r, mz = Math.sin(angle)*r;
+        spawnGTEnemy('megaSpider', mx, mz);
         megaSpiderExists = true;
     }
 
@@ -2424,7 +2425,10 @@ function spawnGTEnemy(type, wx, wz) {
     const def = GT_ENEMY_DEFS[type];
     if (!def) return;
     const enemy = { type, def, x:wx, y:0, z:wz, vx:0, vz:0,
-        sprite:null, lastHit:0, statuePhase:0, statuePhaseTimer:0, lastMove:0 };
+        sprite:null, lastHit:0, statuePhase:0, statuePhaseTimer:0, lastMove:0,
+        spreadOffset: (Math.random() - 0.5) * 2.4, // anti-clump angle offset (~±137 degrees)
+        wanderTimer: Math.random() * 20,            // stagger initial wander so they don't all go at once
+        wanderDir: null };
     getSpriteTexture(type, def, tex => {
         const mat = new THREE.SpriteMaterial({map:tex,transparent:true,depthTest:true,depthWrite:false,sizeAttenuation:true});
         if (def.tint) mat.color.set(def.tint);
@@ -2514,9 +2518,28 @@ function updateGhostTown(dt) {
             }
 
         } else if (e.type === 'spiderRed') {
-            const len = pdist || 1;
-            e.x += (pdx/len)*e.def.speed*dt;
-            e.z += (pdz/len)*e.def.speed*dt;
+            // Every 20s pick a random wander direction for 3s, then resume chasing
+            if (!e.wanderTimer) e.wanderTimer = 0;
+            if (!e.wanderDir) e.wanderDir = null;
+            e.wanderTimer += dt;
+            if (e.wanderDir) {
+                // Wandering sideways
+                e.x += e.wanderDir.x * e.def.speed * 0.6 * dt;
+                e.z += e.wanderDir.z * e.def.speed * 0.6 * dt;
+                if (e.wanderTimer >= 3) { e.wanderDir = null; e.wanderTimer = 0; }
+            } else {
+                // Chase with a small perpendicular spread (anti-clump)
+                const len = pdist || 1;
+                const perpAngle = Math.atan2(pdz, pdx) + (e.spreadOffset || 0);
+                e.x += Math.cos(perpAngle) * e.def.speed * dt;
+                e.z += Math.sin(perpAngle) * e.def.speed * dt;
+                if (e.wanderTimer >= 20) {
+                    // Start wander — pick a random sideways direction
+                    const sideAngle = Math.atan2(pdz, pdx) + (Math.random() < 0.5 ? Math.PI/2 : -Math.PI/2);
+                    e.wanderDir = { x: Math.cos(sideAngle), z: Math.sin(sideAngle) };
+                    e.wanderTimer = 0;
+                }
+            }
             if (pdist < 60 && now - e.lastHit > 1500) {
                 e.lastHit = now; dealGTDmg(15); showGTMsg('A spider bit you!'); setTimeout(()=>showGTMsg(''),1500);
             }
