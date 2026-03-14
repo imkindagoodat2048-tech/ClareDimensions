@@ -246,6 +246,11 @@
     font-size:11px;color:#a29bfe;background:rgba(15,15,26,0.9);
     border:1px solid var(--primary);padding:4px 14px;border-radius:6px;
     pointer-events:none;z-index:60;display:none;"></div>
+<div id="weather-timer" style="
+    position:fixed;top:44px;left:14px;z-index:60;display:none;
+    background:rgba(15,15,26,0.9);border:1px solid var(--primary);
+    border-radius:6px;padding:4px 10px;font-size:11px;color:var(--accent);
+    font-family:'Courier New',monospace;letter-spacing:0.05em;"></div>
 
 <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-database-compat.js"></script>
@@ -502,6 +507,16 @@ function enterHub() {
     document.getElementById('dim-label').innerText = 'HUB';
     document.getElementById('gen-btn').style.display = 'none';
     clearEnemies();
+    clearRemoteEnemies('grasslands');
+    clearRemoteEnemies('ghosttown');
+    db.ref('cd_enemy_state/grasslands').off();
+    db.ref('cd_enemy_state/ghosttown').off();
+    // Release host claim if held
+    if (isEnemyHost) {
+        db.ref('cd_enemy_host/grasslands').remove();
+        db.ref('cd_enemy_host/ghosttown').remove();
+        isEnemyHost = false;
+    }
 
     if (!hubScene) buildHubScene();
     activeScene  = hubScene;
@@ -644,20 +659,24 @@ function enterGrasslands() {
     activeScene  = grassScene;
     activeCamera = grassCamera;
 
-    // Spawn just inside the return portal
     pos.x = 0; pos.z = G_SIZE - 200; pos.y = getTerrainY(pos.x, pos.z);
     grassCamera.position.set(pos.x, pos.y + EYE_H, pos.z);
 
-    // Live terrain sync — updates for everyone when bartelsfamily5 generates
+    // Live terrain sync
     db.ref('cd_grasslands_terrain').on('value', snap => {
         if (snap.exists()) {
             applyTerrain(snap.val());
-            spawnGrasslandsEnemies();
+            electEnemyHost('grasslands');
         }
     });
 
-    // Spawn enemies
-    spawnGrasslandsEnemies();
+    electEnemyHost('grasslands');
+
+    // Listen for enemy state from host
+    db.ref('cd_enemy_state/grasslands').on('value', snap => {
+        if (isEnemyHost || !snap.exists()) return;
+        applyRemoteEnemies(snap.val(), 'grasslands');
+    });
 }
 
 function buildGrassScene() {
@@ -945,6 +964,11 @@ function makeTree(rng) {
 // ════════════════════════════════════════════════
 const enemies = [];
 let enemyElems = []; // kept for clearEnemies compat, unused now
+let isEnemyHost = false;      // true = this client writes enemy positions to Firebase
+let enemyHostId = null;       // Firebase key of current host
+let lastEnemyPush = 0;
+let remoteEnemySprites = {};  // id -> THREE.Sprite for grasslands remote render
+let remoteGTSprites = {};     // id -> THREE.Sprite for ghosttown remote render
 const ENEMY_DEFS = {
     buddy:         { img: 'enemies/buddy.png',         hostile: false, speed: 200,  size: 80,  y: 0,   minY: 0   },
     fly:           { img: 'enemies/fly.png',           hostile: false, speed: 280,  size: 55,  y: 40,  minY: 0   },
@@ -1211,6 +1235,119 @@ function updateEnemies(dt) {
 }
 
 // ════════════════════════════════════════════════
+// ENEMY SYNC — host writes, clients read
+// ════════════════════════════════════════════════
+
+function electEnemyHost(dim) {
+    const hostRef = db.ref('cd_enemy_host/' + dim);
+    hostRef.transaction(current => {
+        // If no host, or host is gone (we can't know, so we claim it and overwrite)
+        // bartelsfamily5 always takes priority
+        if (!current || myName === 'bartelsfamily5') return myId;
+        return current; // keep existing
+    }, (err, committed, snap) => {
+        isEnemyHost = snap && snap.val() === myId;
+        enemyHostId = snap && snap.val();
+        if (isEnemyHost) {
+            // Remove host claim on disconnect
+            hostRef.onDisconnect().remove();
+            // Actually spawn enemies now
+            if (dim === 'grasslands') spawnGrasslandsEnemies();
+            else if (dim === 'ghosttown') spawnGTEnemies();
+        }
+    });
+    // Listen for host changes
+    hostRef.on('value', snap => {
+        const newHost = snap.val();
+        if (!newHost && myId) {
+            // Host left — try to claim
+            isEnemyHost = false;
+            electEnemyHost(dim);
+        }
+        isEnemyHost = newHost === myId;
+    });
+}
+
+function pushEnemyState(dim) {
+    const now = Date.now();
+    if (!isEnemyHost || now - lastEnemyPush < 100) return;
+    lastEnemyPush = now;
+
+    if (dim === 'grasslands') {
+        const state = {};
+        enemies.forEach((e, i) => {
+            state[i] = { type: e.type, x: +e.x.toFixed(1), y: +e.y.toFixed(1), z: +e.z.toFixed(1) };
+        });
+        db.ref('cd_enemy_state/grasslands').set(state);
+    } else if (dim === 'ghosttown') {
+        const state = {};
+        gtEnemies.forEach((e, i) => {
+            if (e.dead) return;
+            state[i] = { type: e.type, x: +e.x.toFixed(1), z: +e.z.toFixed(1) };
+        });
+        db.ref('cd_enemy_state/ghosttown').set(state);
+    }
+}
+
+function applyRemoteEnemies(state, dim) {
+    if (dim === 'grasslands') {
+        // Remove old sprites not in new state
+        const ids = new Set(Object.keys(state));
+        for (const id in remoteEnemySprites) {
+            if (!ids.has(id)) { grassScene.remove(remoteEnemySprites[id]); delete remoteEnemySprites[id]; }
+        }
+        for (const id in state) {
+            const e = state[id];
+            const def = ENEMY_DEFS[e.type];
+            if (!def) continue;
+            if (!remoteEnemySprites[id]) {
+                getSpriteTexture(e.type, def, tex => {
+                    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, depthWrite: false, sizeAttenuation: true });
+                    const sp = new THREE.Sprite(mat);
+                    sp.scale.set(def.size, def.size, 1);
+                    grassScene.add(sp);
+                    remoteEnemySprites[id] = sp;
+                });
+            } else {
+                remoteEnemySprites[id].position.set(e.x, e.y + def.size * 0.5, e.z);
+            }
+        }
+    } else if (dim === 'ghosttown') {
+        const ids = new Set(Object.keys(state));
+        for (const id in remoteGTSprites) {
+            if (!ids.has(id)) { gtScene.remove(remoteGTSprites[id]); delete remoteGTSprites[id]; }
+        }
+        for (const id in state) {
+            const e = state[id];
+            const def = GT_ENEMY_DEFS[e.type];
+            if (!def) continue;
+            if (!remoteGTSprites[id]) {
+                getSpriteTexture(e.type, def, tex => {
+                    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, depthWrite: false, sizeAttenuation: true });
+                    if (def.tint) mat.color.set(def.tint);
+                    const sp = new THREE.Sprite(mat);
+                    sp.scale.set(def.size, def.size, 1);
+                    gtScene.add(sp);
+                    remoteGTSprites[id] = sp;
+                });
+            } else {
+                remoteGTSprites[id].position.set(e.x, getGTTerrainY(e.x, e.z) + def.size * 0.5, e.z);
+            }
+        }
+    }
+}
+
+function clearRemoteEnemies(dim) {
+    if (dim === 'grasslands') {
+        for (const id in remoteEnemySprites) { grassScene?.remove(remoteEnemySprites[id]); }
+        remoteEnemySprites = {};
+    } else if (dim === 'ghosttown') {
+        for (const id in remoteGTSprites) { gtScene?.remove(remoteGTSprites[id]); }
+        remoteGTSprites = {};
+    }
+}
+
+// ════════════════════════════════════════════════
 // PORTAL CHECKING
 // ════════════════════════════════════════════════
 let lastPortalCheck = 0;
@@ -1370,6 +1507,8 @@ function update(dt) {
     updateNameTags();
     updateEnemies(dt);
     if (currentDim === 'ghosttown') updateGhostTown(dt);
+    if (currentDim === 'grasslands') pushEnemyState('grasslands');
+    else if (currentDim === 'ghosttown') pushEnemyState('ghosttown');
 
     // Animate hub portal glow
     if (currentDim === 'hub' && hubPortalMeshes) {
@@ -1482,21 +1621,35 @@ function enterGhostTown() {
 
     // Load from Firebase
     db.ref('cd_ghosttown').once('value', snap => {
-        if (snap.exists()) applyGTData(snap.val());
+        if (snap.exists()) {
+            applyGTData(snap.val());
+            electEnemyHost('ghosttown');
+        }
     });
     // Live weather sync
     db.ref('cd_gt_weather').on('value', snap => {
         if (snap.exists()) applyWeather(snap.val());
+    });
+    // Listen for enemy state from host
+    db.ref('cd_enemy_state/ghosttown').on('value', snap => {
+        if (isEnemyHost || !snap.exists()) return;
+        applyRemoteEnemies(snap.val(), 'ghosttown');
     });
 }
 
 function exitGhostTown() {
     if (gtInInterior) leaveInterior();
     document.getElementById('hp-bar').style.display = 'none';
+    document.getElementById('weather-timer').style.display = 'none';
     gtMsg.style.display = 'none';
     document.getElementById('bsmt-interact').style.display = 'none';
     document.getElementById('c').style.transform = '';
     db.ref('cd_gt_weather').off();
+    db.ref('cd_gt_countdown').off();
+    db.ref('cd_gt_weather_host').off();
+    if (gtWeatherInterval) { clearInterval(gtWeatherInterval); gtWeatherInterval = null; }
+    // Release weather host claim
+    db.ref('cd_gt_weather_host').transaction(cur => cur === myId ? null : cur);
     clearGTEnemies();
     enterHub();
 }
@@ -1923,6 +2076,7 @@ function applyWeather(w) {
     // Respawn enemies for new weather
     clearGTEnemies();
     if (gtGenerated || Object.keys(gtBuildings).length > 0) spawnGTEnemies();
+    updateWeatherTimerUI();
 }
 
 function buildRain() {
@@ -1947,25 +2101,104 @@ function stopShake() {
 
 // ── Weather cycling (host-side: bartelsfamily5 drives the clock) ───────
 let gtWeatherInterval = null;
+let gtWeatherHostRef = null;
+let gtWeatherCountdown = 0;       // seconds until next cycle, driven by Firebase
+let gtLastWeather = 'day';        // track previous weather to prevent repeats
+
 function startWeatherCycle() {
-    if (gtWeatherInterval) return;
+    // Use same host-election pattern as enemies — first player in drives the clock
+    const hostRef = db.ref('cd_gt_weather_host');
+    hostRef.transaction(cur => cur || myId, (err, committed, snap) => {
+        const amHost = snap && snap.val() === myId;
+        if (amHost) {
+            hostRef.onDisconnect().remove();
+            gtWeatherHostRef = hostRef;
+            runWeatherClock();
+        }
+    });
+    // If host leaves, new player takes over
+    hostRef.on('value', snap => {
+        if (!snap.val() && myId && currentDim === 'ghosttown') {
+            // Re-try
+            hostRef.transaction(cur => cur || myId, (err, committed, snap2) => {
+                if (snap2 && snap2.val() === myId) {
+                    hostRef.onDisconnect().remove();
+                    runWeatherClock();
+                }
+            });
+        }
+    });
+
+    // All clients listen for the countdown value
+    db.ref('cd_gt_countdown').on('value', snap => {
+        if (snap.exists()) gtWeatherCountdown = snap.val();
+        updateWeatherTimerUI();
+    });
+}
+
+function runWeatherClock() {
+    if (gtWeatherInterval) clearInterval(gtWeatherInterval);
+    // Initialise countdown
+    gtWeatherCountdown = WEATHER_CYCLE / 1000;
+    db.ref('cd_gt_countdown').set(gtWeatherCountdown);
+
     gtWeatherInterval = setInterval(() => {
-        if (myName !== 'bartelsfamily5' || currentDim !== 'ghosttown') return;
-        let next;
-        // Reckoning chance: 1/7 if Peeping Tom is active, otherwise 1/15
-        const reckoningChance = peepingTomActive ? 1/7 : 1/15;
-        if (Math.random() < reckoningChance) {
-            next = 'reckoning';
-        } else {
-            const safe = ['day','night','rainy'];
-            next = safe[Math.floor(Math.random()*safe.length)];
-        }
-        db.ref('cd_gt_weather').set(next);
-        // Reckoning only lasts 1 minute then goes back to day
-        if (next === 'reckoning') {
-            setTimeout(() => db.ref('cd_gt_weather').set('day'), 60000);
-        }
-    }, WEATHER_CYCLE);
+        if (currentDim !== 'ghosttown') return;
+
+        // Check we are still host
+        db.ref('cd_gt_weather_host').once('value', snap => {
+            if (!snap.val() || snap.val() !== myId) return;
+
+            gtWeatherCountdown = Math.max(0, gtWeatherCountdown - 1);
+            db.ref('cd_gt_countdown').set(gtWeatherCountdown);
+
+            if (gtWeatherCountdown <= 0) {
+                // Pick next weather — no repeat (except rain can repeat)
+                const reckoningChance = peepingTomActive ? 1/7 : 1/15;
+                let next;
+                let attempts = 0;
+                do {
+                    if (Math.random() < reckoningChance) {
+                        next = 'reckoning';
+                    } else {
+                        const safe = ['day','night','rainy'];
+                        next = safe[Math.floor(Math.random()*safe.length)];
+                    }
+                    attempts++;
+                } while (next === gtLastWeather && next !== 'rainy' && attempts < 10);
+
+                gtLastWeather = next;
+                db.ref('cd_gt_weather').set(next);
+
+                // Reckoning only lasts 60s then snaps back to day
+                if (next === 'reckoning') {
+                    setTimeout(() => {
+                        db.ref('cd_gt_weather').set('day');
+                        gtLastWeather = 'day';
+                        gtWeatherCountdown = WEATHER_CYCLE / 1000;
+                        db.ref('cd_gt_countdown').set(gtWeatherCountdown);
+                    }, 60000);
+                    gtWeatherCountdown = 60; // show reckoning countdown
+                } else {
+                    gtWeatherCountdown = WEATHER_CYCLE / 1000;
+                }
+                db.ref('cd_gt_countdown').set(gtWeatherCountdown);
+            }
+        });
+    }, 1000); // tick every second
+}
+
+function updateWeatherTimerUI() {
+    const el = document.getElementById('weather-timer');
+    if (!el) return;
+    if (currentDim !== 'ghosttown') { el.style.display = 'none'; return; }
+    const secs = Math.ceil(gtWeatherCountdown);
+    const mins = Math.floor(secs / 60), s = secs % 60;
+    const label = gtWeather === 'reckoning' ? '⚠️ Reckoning ends' : '🌤 Next cycle';
+    el.innerText = `${label}: ${mins}:${String(s).padStart(2,'0')}`;
+    el.style.display = 'block';
+    el.style.borderColor = gtWeather === 'reckoning' ? '#eb4d4b' : 'var(--primary)';
+    el.style.color       = gtWeather === 'reckoning' ? '#eb4d4b' : 'var(--accent)';
 }
 
 // ── Interiors ─────────────────────────────────────────────────────────
