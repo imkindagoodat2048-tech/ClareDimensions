@@ -1288,10 +1288,37 @@ function update(dt) {
         if (hr < HUB_R - 10) { pos.x = newX; pos.z = newZ; }
         pos.y = 0;
     } else if (currentDim === 'ghosttown') {
-        const spd = (gtSlowTimer > 0 && Date.now()-gtSlowTimer < 60000) ? GT_SPEED * 0.4 : GT_SPEED;
-        pos.x = newX; pos.z = newZ; pos.y = 0;
-        pos.x = Math.max(-GT_SIZE+50, Math.min(GT_SIZE-50, pos.x));
-        pos.z = Math.max(-GT_SIZE+50, Math.min(GT_SIZE-50, pos.z));
+        let nx = newX, nz = newZ;
+        nx = Math.max(-GT_SIZE+50, Math.min(GT_SIZE-50, nx));
+        nz = Math.max(-GT_SIZE+50, Math.min(GT_SIZE-50, nz));
+        // Wall collision — test X and Z separately so player can slide along walls
+        const PR = 40; // player radius
+        let blocked = false;
+        for (const box of gtCollisionBoxes) {
+            if (nx > box.minX - PR && nx < box.maxX + PR && nz > box.minZ - PR && nz < box.maxZ + PR) {
+                blocked = true; break;
+            }
+        }
+        if (!blocked) { pos.x = nx; pos.z = nz; }
+        else {
+            // Try sliding on X only
+            let blockedX = false;
+            for (const box of gtCollisionBoxes) {
+                if (nx > box.minX - PR && nx < box.maxX + PR && pos.z > box.minZ - PR && pos.z < box.maxZ + PR) {
+                    blockedX = true; break;
+                }
+            }
+            if (!blockedX) pos.x = nx;
+            // Try sliding on Z only
+            let blockedZ = false;
+            for (const box of gtCollisionBoxes) {
+                if (pos.x > box.minX - PR && pos.x < box.maxX + PR && nz > box.minZ - PR && nz < box.maxZ + PR) {
+                    blockedZ = true; break;
+                }
+            }
+            if (!blockedZ) pos.z = nz;
+        }
+        pos.y = getGTTerrainY(pos.x, pos.z);
     } else {
         // Grasslands — clamp to terrain bounds
         newX = Math.max(-G_SIZE + 50, Math.min(G_SIZE - 50, newX));
@@ -1329,7 +1356,7 @@ function update(dt) {
             activeScene.add(mesh);
             playerMeshes[id] = mesh;
         }
-        const groundY = currentDim === 'grasslands' ? getTerrainY(p.x, p.z) : 0;
+        const groundY = currentDim === 'grasslands' ? getTerrainY(p.x, p.z) : currentDim === 'ghosttown' ? getGTTerrainY(p.x, p.z) : 0;
         playerMeshes[id].position.set(p.x, groundY, p.z);
         playerMeshes[id].rotation.y = p.yaw || 0;
     }
@@ -1343,9 +1370,6 @@ function update(dt) {
     updateNameTags();
     updateEnemies(dt);
     if (currentDim === 'ghosttown') updateGhostTown(dt);
-    else if (currentDim === 'ghosttown' && gtInInterior) {
-        activeScene = gtInteriorScene; activeCamera = gtInteriorCamera;
-    }
 
     // Animate hub portal glow
     if (currentDim === 'hub' && hubPortalMeshes) {
@@ -1378,7 +1402,7 @@ function updateNameTags() {
             nameTags[id] = el;
         }
         const tag = nameTags[id];
-        const groundY = currentDim === 'grasslands' ? getTerrainY(p.x, p.z) : 0;
+        const groundY = currentDim === 'grasslands' ? getTerrainY(p.x, p.z) : currentDim === 'ghosttown' ? getGTTerrainY(p.x, p.z) : 0;
         const wp  = new THREE.Vector3(p.x, groundY + 75, p.z);
         const prj = wp.clone().project(activeCamera);
         const sx  = (prj.x * 0.5 + 0.5) * W;
@@ -1400,18 +1424,22 @@ function updateNameTags() {
 // ════════════════════════════════════════════════════════════════════
 
 // ── Constants ────────────────────────────────────────────────────────
-const GT_SIZE        = 6000;   // half-size of full map
-const TOWN_R         = 1200;   // radius of town zone
-const DESERT_R       = 3000;   // desert zone outer radius
-const MOUNTAIN_R     = 4200;   // mountain zone outer radius
+const GT_SIZE        = 18000;  // half-size of full map (3x bigger)
+const TOWN_R         = 3600;   // radius of town zone (3x)
+const DESERT_R       = 9000;   // desert zone outer radius (3x)
+const MOUNTAIN_R     = 12600;  // mountain zone outer radius (3x)
 // Beyond MOUNTAIN_R = Dark Region
 const GT_SPEED       = 420;
+const GT_TERRAIN_SEGS = 180;   // terrain resolution
 const WEATHER_CYCLE  = 300000; // 5 minutes in ms
 const WEATHERS       = ['day','night','rainy','reckoning'];
 
 // ── State ─────────────────────────────────────────────────────────────
 let gtScene = null, gtCamera = null;
 let gtGenerated  = false;
+let gtTerrainMesh = null;
+let gtTerrainHeights = null; // 2D array [vi][ui]
+let gtCollisionBoxes = []; // { minX, maxX, minZ, maxZ } world-space AABB per wall
 let gtWeather    = 'day';
 let gtWeatherTimer = 0;
 let gtBuildings  = [];   // { type, x, z, mesh, interior:null }
@@ -1446,6 +1474,8 @@ function enterGhostTown() {
     if (!gtScene) buildGTScene();
     activeScene  = gtScene;
     activeCamera = gtCamera;
+    activeCamera.far = 40000;
+    activeCamera.updateProjectionMatrix();
     pos.x = 0; pos.y = 0; pos.z = 0;
     playerHP_gt = 100; updateHPUI();
     startWeatherCycle();
@@ -1476,24 +1506,147 @@ function buildGTScene() {
     gtScene  = new THREE.Scene();
     gtScene.background = new THREE.Color(0x87ceeb);
     gtCamera = makeCamera();
-    gtCamera.far = 14000;
+    gtCamera.far = 40000;
     gtCamera.updateProjectionMatrix();
 
     gtAmbLight = new THREE.AmbientLight(0xffffff, 0.7);
     gtScene.add(gtAmbLight);
     gtSunLight = new THREE.DirectionalLight(0xfff5e0, 1.0);
-    gtSunLight.position.set(800, 1200, 600);
+    gtSunLight.position.set(2400, 3600, 1800);
     gtScene.add(gtSunLight);
 
-    // Ground plane — will be recolored by zone in generateGhostTown
-    const ground = new THREE.Mesh(
-        new THREE.PlaneGeometry(GT_SIZE*2, GT_SIZE*2, 120, 120),
-        new THREE.MeshLambertMaterial({ color: 0xd4a96a, vertexColors: false })
-    );
-    ground.rotation.x = -Math.PI/2;
-    ground.userData.isGTGround = true;
-    gtScene.add(ground);
-    gtScene.fog = new THREE.Fog(0x87ceeb, GT_SIZE*0.6, GT_SIZE*1.4);
+    // Terrain mesh with height support
+    const geo = new THREE.PlaneGeometry(GT_SIZE*2, GT_SIZE*2, GT_TERRAIN_SEGS, GT_TERRAIN_SEGS);
+    gtTerrainMesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0xd4a96a, vertexColors: false }));
+    gtTerrainMesh.rotation.x = -Math.PI/2;
+    gtTerrainMesh.userData.isGTGround = true;
+    gtTerrainMesh.receiveShadow = true;
+    gtScene.add(gtTerrainMesh);
+    gtScene.fog = new THREE.Fog(0x87ceeb, GT_SIZE*0.4, GT_SIZE*1.0);
+}
+
+// ── GT Terrain helpers ────────────────────────────────────────────────
+function getGTTerrainY(wx, wz) {
+    if (!gtTerrainMesh || !gtTerrainHeights) return 0;
+    const u = (wx / (GT_SIZE * 2) + 0.5);
+    const v = (wz / (GT_SIZE * 2) + 0.5);
+    const ui = Math.max(0, Math.min(GT_TERRAIN_SEGS, Math.round(u * GT_TERRAIN_SEGS)));
+    const vi = Math.max(0, Math.min(GT_TERRAIN_SEGS, Math.round(v * GT_TERRAIN_SEGS)));
+    return gtTerrainHeights[vi]?.[ui] ?? 0;
+}
+
+function buildGTTerrain(rng) {
+    const segs = GT_TERRAIN_SEGS;
+    const heights = [];
+
+    // Place mountain zones around the ring perimeter
+    const mountainZones = [];
+    const numPeaks = 60;
+    for (let i = 0; i < numPeaks; i++) {
+        const angle = (i / numPeaks) * Math.PI * 2 + (rng() - 0.5) * 0.2;
+        const r = (MOUNTAIN_R / GT_SIZE) * 0.5 + (rng() - 0.5) * 0.04; // normalized 0-1
+        mountainZones.push({
+            cx: Math.cos(angle) * r + 0.5,
+            cz: Math.sin(angle) * r + 0.5,
+            outerR: 0.04 + rng() * 0.03,
+            height: 500 + rng() * 600,
+        });
+    }
+    // A few extra inland peaks in dark region
+    for (let i = 0; i < 12; i++) {
+        const angle = rng() * Math.PI * 2;
+        const r = ((MOUNTAIN_R + 1000) / GT_SIZE) * 0.5 + rng() * 0.06;
+        mountainZones.push({
+            cx: Math.cos(angle) * r + 0.5,
+            cz: Math.sin(angle) * r + 0.5,
+            outerR: 0.02 + rng() * 0.025,
+            height: 300 + rng() * 400,
+        });
+    }
+
+    for (let vi = 0; vi <= segs; vi++) {
+        heights.push([]);
+        for (let ui = 0; ui <= segs; ui++) {
+            const u = ui / segs, v = vi / segs;
+            const wx = (u - 0.5) * GT_SIZE * 2;
+            const wz = (v - 0.5) * GT_SIZE * 2;
+            const distFromCenter = Math.sqrt(wx*wx + wz*wz);
+
+            // Gentle rolling hills across the map
+            const freq = 1 / 4000;
+            const baseBump = (
+                Math.sin(wx * freq * 1.1 + 0.5) * Math.cos(wz * freq * 0.9 + 0.3) +
+                Math.sin(wx * freq * 2.3 + 1.2) * Math.cos(wz * freq * 2.0 + 0.8)
+            ) * 30;
+
+            // Mountain influence
+            let mInfluence = 0, mHeight = 0;
+            for (const z of mountainZones) {
+                const du = u - z.cx, dv = v - z.cz;
+                const dist = Math.sqrt(du*du + dv*dv);
+                if (dist < z.outerR) {
+                    const t = 1 - dist / z.outerR;
+                    const ts = t * t * (3 - 2 * t);
+                    if (ts > mInfluence) { mInfluence = ts; mHeight = z.height; }
+                }
+            }
+
+            let h = baseBump;
+            if (mInfluence > 0) {
+                const ridgeNoise = Math.sin(wx * freq * 5 + 2.1) * Math.cos(wz * freq * 4 + 1.3) * 80;
+                h = baseBump * (1 - mInfluence) + (mHeight + ridgeNoise) * mInfluence;
+            }
+
+            // Town area stays flat
+            if (distFromCenter < TOWN_R * 0.7) {
+                const blend = Math.max(0, 1 - distFromCenter / (TOWN_R * 0.7));
+                h = h * (1 - blend * 0.9);
+            }
+
+            heights[vi].push(Math.max(0, h));
+        }
+    }
+
+    gtTerrainHeights = heights;
+
+    // Apply to mesh with vertex colors
+    const positions = gtTerrainMesh.geometry.attributes.position;
+    const colorArr = [];
+    for (let vi = 0; vi <= segs; vi++) {
+        for (let ui = 0; ui <= segs; ui++) {
+            const idx = vi * (segs + 1) + ui;
+            const h = heights[vi][ui];
+            const wx = (ui / segs - 0.5) * GT_SIZE * 2;
+            const wz = (vi / segs - 0.5) * GT_SIZE * 2;
+            const dist = Math.sqrt(wx*wx + wz*wz);
+            positions.setZ(idx, h);
+
+            let r, g, b;
+            if (mInfluenceAt(h, dist)) {
+                // Mountain — rocky
+                if (h > 700) { r=0.82; g=0.80; b=0.78; }       // snow cap
+                else if (h > 350) { r=0.55; g=0.50; b=0.43; }  // grey rock
+                else { r=0.38; g=0.34; b=0.26; }                // rocky base
+            } else if (dist < TOWN_R) {
+                r=0.72; g=0.62; b=0.42; // dirt beige
+            } else if (dist < DESERT_R) {
+                r=0.82; g=0.72; b=0.48; // sand
+            } else if (dist < MOUNTAIN_R) {
+                r=0.52; g=0.46; b=0.38; // rocky grey desert
+            } else {
+                r=0.28; g=0.22; b=0.15; // dark region
+            }
+            colorArr.push(r, g, b);
+        }
+    }
+    positions.needsUpdate = true;
+    gtTerrainMesh.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colorArr, 3));
+    gtTerrainMesh.material.vertexColors = true;
+    gtTerrainMesh.geometry.computeVertexNormals();
+}
+
+function mInfluenceAt(h, dist) {
+    return h > 200 && dist > DESERT_R * 0.6;
 }
 
 // ── Generation ────────────────────────────────────────────────────────
@@ -1502,91 +1655,69 @@ function generateGhostTown() {
     const rng = seededRand(Date.now() % 9999);
 
     // Clear old
-    gtBuildings.forEach(b => { gtScene.remove(b.mesh); });
-    gtBuildings = []; clearGTEnemies();
+    gtBuildings.forEach(b => { gtScene.remove(b.mesh); b.scene = null; b.camera = null; });
+    gtBuildings = []; gtCollisionBoxes = []; clearGTEnemies();
 
-    // ── Colour ground by zone ──
-    const ground = gtScene.children.find(c => c.userData.isGTGround);
-    if (ground) {
-        const segs = 120;
-        const pos3 = ground.geometry.attributes.position;
-        const colors = [];
-        for (let i = 0; i <= segs; i++) {
-            for (let j = 0; j <= segs; j++) {
-                const idx = i*(segs+1)+j;
-                const wx = pos3.getX(idx), wz = pos3.getY(idx); // PlaneGeometry uses X/Y before rotation
-                const dist = Math.sqrt(wx*wx + wz*wz);
-                let r,g,b;
-                if (dist < TOWN_R) {
-                    // Dirt road beige
-                    r=0.72; g=0.62; b=0.42;
-                } else if (dist < DESERT_R) {
-                    // Sand
-                    r=0.82; g=0.72; b=0.48;
-                } else if (dist < MOUNTAIN_R) {
-                    // Rocky grey
-                    r=0.52; g=0.46; b=0.38;
-                } else {
-                    // Dark region — darker sand
-                    r=0.38; g=0.30; b=0.20;
-                }
-                colors.push(r,g,b);
-            }
-        }
-        ground.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors,3));
-        ground.material.vertexColors = true;
-        ground.geometry.computeVertexNormals();
-    }
+    // ── Build terrain ──
+    buildGTTerrain(rng);
 
-    // ── Road down center ──
+    // ── Road down center (on terrain) ──
     const road = new THREE.Mesh(
-        new THREE.PlaneGeometry(120, TOWN_R*2),
+        new THREE.PlaneGeometry(360, TOWN_R*2),
         new THREE.MeshLambertMaterial({ color: 0x555555 })
     );
-    road.rotation.x = -Math.PI/2; road.position.y = 1;
+    road.rotation.x = -Math.PI/2; road.position.y = 2;
     gtScene.add(road);
     const road2 = road.clone(); road2.rotation.z = Math.PI/2; gtScene.add(road2);
 
-    // ── Mountains ring ──
-    buildMountainsRing(rng);
-
     // ── Cacti in desert ──
-    for (let c=0; c<80; c++) {
+    for (let c=0; c<200; c++) {
         const angle = rng()*Math.PI*2;
-        const r = TOWN_R + 200 + rng()*(MOUNTAIN_R - TOWN_R - 400);
+        const r = TOWN_R + 500 + rng()*(MOUNTAIN_R - TOWN_R - 1000);
         const cx = Math.cos(angle)*r, cz = Math.sin(angle)*r;
-        gtScene.add(makeCactus(cx, cz));
+        const cy = getGTTerrainY(cx, cz);
+        const cactus = makeCactus(cx, cz);
+        cactus.position.y = cy;
+        gtScene.add(cactus);
     }
 
-    // ── Town Hall (always 1) ──
+    // ── Town Hall (always 1, near center) ──
     placeTownHall(rng);
 
     // ── Museum (always 1) ──
     placeMuseum(rng);
 
-    // ── Other buildings ──
+    // ── Other buildings — no overlap ──
     const buildingPool = ['store','house1','house2','misc1','misc2','misc3','misc4'];
-    const numBuildings = 14 + Math.floor(rng()*8);
-    const placed = [];
+    const numBuildings = 18 + Math.floor(rng()*10);
+    const placed = [
+        { x: gtBuildings[0]?.x||0, z: gtBuildings[0]?.z||0, hw: 280, hd: 220 },
+        { x: gtBuildings[1]?.x||0, z: gtBuildings[1]?.z||0, hw: 260, hd: 210 },
+    ];
     for (let i=0; i<numBuildings; i++) {
         let attempts = 0, ok = false, bx, bz;
-        while (attempts++ < 30 && !ok) {
+        while (attempts++ < 60 && !ok) {
             const angle = rng()*Math.PI*2;
-            const r = 200 + rng()*(TOWN_R - 300);
+            const r = 500 + rng()*(TOWN_R - 700);
             bx = Math.cos(angle)*r; bz = Math.sin(angle)*r;
-            // Don't overlap road or existing buildings
-            if (Math.abs(bx) < 100 || Math.abs(bz) < 100) continue;
-            ok = placed.every(p => Math.sqrt((p.x-bx)**2+(p.z-bz)**2) > 300);
+            if (Math.abs(bx) < 300 || Math.abs(bz) < 300) continue;
+            const sz = BLDG_SIZES[buildingPool[0]];
+            const hw = (sz.w/2) + 150, hd = (sz.d/2) + 150;
+            ok = placed.every(p => {
+                return Math.abs(p.x - bx) > (p.hw + hw) || Math.abs(p.z - bz) > (p.hd + hd);
+            });
         }
         if (!ok) continue;
         const type = buildingPool[Math.floor(rng()*buildingPool.length)];
+        const sz = BLDG_SIZES[type];
         placeBuilding(type, bx, bz, rng);
-        placed.push({ x:bx, z:bz });
+        placed.push({ x:bx, z:bz, hw: sz.w/2+150, hd: sz.d/2+150 });
     }
 
     // ── Save ──
     const saveData = {
         buildings: gtBuildings.map(b=>({ type:b.type, x:+b.x.toFixed(1), z:+b.z.toFixed(1), rot:+(b.rot||0).toFixed(3) })),
+        terrain: { heights: gtTerrainHeights.map(row => row.map(v => Math.round(v*10)/10)), segs: GT_TERRAIN_SEGS },
         generated: Date.now()
     };
     db.ref('cd_ghosttown').set(saveData);
@@ -1598,16 +1729,56 @@ function generateGhostTown() {
 function applyGTData(data) {
     if (!data.buildings) return;
     gtBuildings.forEach(b => gtScene.remove(b.mesh));
-    gtBuildings = [];
+    gtBuildings = []; gtCollisionBoxes = [];
+    if (data.terrain && data.terrain.heights) {
+        gtTerrainHeights = data.terrain.heights;
+        const segs = data.terrain.segs || GT_TERRAIN_SEGS;
+        const positions = gtTerrainMesh.geometry.attributes.position;
+        const colorArr = [];
+        for (let vi = 0; vi <= segs; vi++) {
+            for (let ui = 0; ui <= segs; ui++) {
+                const idx = vi * (segs + 1) + ui;
+                const h = gtTerrainHeights[vi]?.[ui] ?? 0;
+                const wx = (ui / segs - 0.5) * GT_SIZE * 2;
+                const wz = (vi / segs - 0.5) * GT_SIZE * 2;
+                const dist = Math.sqrt(wx*wx + wz*wz);
+                positions.setZ(idx, h);
+                let r, g, b;
+                if (mInfluenceAt(h, dist)) {
+                    if (h > 700)      { r=0.82; g=0.80; b=0.78; }
+                    else if (h > 350) { r=0.55; g=0.50; b=0.43; }
+                    else              { r=0.38; g=0.34; b=0.26; }
+                } else if (dist < TOWN_R) {
+                    r=0.72; g=0.62; b=0.42;
+                } else if (dist < DESERT_R) {
+                    r=0.82; g=0.72; b=0.48;
+                } else if (dist < MOUNTAIN_R) {
+                    r=0.52; g=0.46; b=0.38;
+                } else {
+                    r=0.28; g=0.22; b=0.15;
+                }
+                colorArr.push(r, g, b);
+            }
+        }
+        positions.needsUpdate = true;
+        gtTerrainMesh.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colorArr, 3));
+        gtTerrainMesh.material.vertexColors = true;
+        gtTerrainMesh.geometry.computeVertexNormals();
+    }
+
     const rng = seededRand(42);
     data.buildings.forEach(b => placeBuilding(b.type, b.x, b.z, rng, b.rot));
-    buildMountainsRing(seededRand(7));
+
     // Cacti
     const rng2 = seededRand(13);
-    for (let c=0; c<80; c++) {
+    for (let c=0; c<200; c++) {
         const angle = rng2()*Math.PI*2;
-        const r = TOWN_R + 200 + rng2()*(MOUNTAIN_R - TOWN_R - 400);
-        gtScene.add(makeCactus(Math.cos(angle)*r, Math.sin(angle)*r));
+        const r = TOWN_R + 500 + rng2()*(MOUNTAIN_R - TOWN_R - 1000);
+        const cx = Math.cos(angle)*r, cz = Math.sin(angle)*r;
+        const cy = getGTTerrainY(cx, cz);
+        const cactus = makeCactus(cx, cz);
+        cactus.position.y = cy;
+        gtScene.add(cactus);
     }
 }
 
@@ -1628,6 +1799,7 @@ function placeBuilding(type, bx, bz, rng, rot) {
     const sz   = BLDG_SIZES[type] || BLDG_SIZES.misc1;
     const brot = rot !== undefined ? rot : rng()*Math.PI*2;
     const grp  = new THREE.Group();
+    const groundY = getGTTerrainY(bx, bz);
 
     // Walls
     const wallCol = { store:0xd4b483, house1:0xc8a870, house2:0xc09a60,
@@ -1636,36 +1808,49 @@ function placeBuilding(type, bx, bz, rng, rot) {
     const wallMat = new THREE.MeshLambertMaterial({ color: wallCol });
     const roofMat = new THREE.MeshLambertMaterial({ color: 0x884422 });
 
-    // Front, back, left, right walls
     const W=sz.w, D=sz.d, H=sz.h, WT=10;
-    // Back
     grp.add(mkBox(W,H,WT, wallMat, 0,H/2,-D/2));
-    // Left
     grp.add(mkBox(WT,H,D, wallMat, -W/2,H/2,0));
-    // Right
     grp.add(mkBox(WT,H,D, wallMat,  W/2,H/2,0));
-    // Front with door gap
     const doorW=60, doorH=120;
     const sw=(W-doorW)/2;
     grp.add(mkBox(sw,H,WT, wallMat, -W/2+sw/2, H/2, D/2));
     grp.add(mkBox(sw,H,WT, wallMat,  W/2-sw/2, H/2, D/2));
     grp.add(mkBox(doorW,H-doorH,WT, wallMat, 0, doorH+(H-doorH)/2, D/2));
 
-    // Door frame
     const doorMat = new THREE.MeshLambertMaterial({ color: 0x5c3317 });
     grp.add(mkBox(doorW+8,8,WT+2, doorMat, 0, doorH, D/2));
-    // Door marker (invisible trigger zone)
     const doorTrigger = new THREE.Mesh(new THREE.BoxGeometry(doorW,doorH,30), new THREE.MeshBasicMaterial({visible:false}));
     doorTrigger.position.set(0, doorH/2, D/2);
     doorTrigger.userData.isDoor = true; doorTrigger.userData.buildingIdx = gtBuildings.length;
     grp.add(doorTrigger);
 
-    // Roof (flat)
     grp.add(mkBox(W+WT*2, WT, D+WT*2, roofMat, 0, H+WT/2, 0));
 
     grp.rotation.y = brot;
-    grp.position.set(bx, 0, bz);
+    grp.position.set(bx, groundY, bz);
     gtScene.add(grp);
+
+    // Register wall collision boxes in world space (axis-aligned, conservative)
+    // Use a padded AABB around the whole building footprint rotated
+    const padding = 20;
+    const cosR = Math.cos(brot), sinR = Math.sin(brot);
+    // Build wall segments as local AABBs then transform to world
+    const wallSegs = [
+        { lx:0, lz:-D/2, hw:W/2+WT, hd:WT/2 },   // back
+        { lx:0, lz: D/2, hw:W/2+WT, hd:WT/2 },   // front
+        { lx:-W/2, lz:0, hw:WT/2, hd:D/2+WT },   // left
+        { lx: W/2, lz:0, hw:WT/2, hd:D/2+WT },   // right
+    ];
+    for (const ws of wallSegs) {
+        // Transform local center to world
+        const wx2 = bx + ws.lx * cosR - ws.lz * sinR;
+        const wz2 = bz + ws.lx * sinR + ws.lz * cosR;
+        // Conservative AABB of rotated box
+        const absHW = Math.abs(ws.hw * cosR) + Math.abs(ws.hd * sinR) + padding;
+        const absHD = Math.abs(ws.hw * sinR) + Math.abs(ws.hd * cosR) + padding;
+        gtCollisionBoxes.push({ minX: wx2 - absHW, maxX: wx2 + absHW, minZ: wz2 - absHD, maxZ: wz2 + absHD });
+    }
 
     const bldg = { type, x:bx, z:bz, rot:brot, mesh:grp, sz, interior:null };
     gtBuildings.push(bldg);
@@ -1673,10 +1858,10 @@ function placeBuilding(type, bx, bz, rng, rot) {
 }
 
 function placeTownHall(rng) {
-    placeBuilding('townhall', (rng()-0.5)*200, -(TOWN_R*0.6), rng, 0);
+    placeBuilding('townhall', (rng()-0.5)*600, -(TOWN_R*0.6), rng, 0);
 }
 function placeMuseum(rng) {
-    placeBuilding('museum', (rng()-0.5)*200, TOWN_R*0.55, rng, Math.PI);
+    placeBuilding('museum', (rng()-0.5)*600, TOWN_R*0.55, rng, Math.PI);
 }
 
 function mkBox(w,h,d,mat,x,y,z) {
@@ -1699,21 +1884,6 @@ function makeCactus(x,z) {
     return g;
 }
 
-// ── Mountains ring ────────────────────────────────────────────────────
-function buildMountainsRing(rng) {
-    const mat = new THREE.MeshLambertMaterial({ color: 0x887755 });
-    const count = 48;
-    for (let i=0; i<count; i++) {
-        const angle = (i/count)*Math.PI*2 + (rng()-0.5)*0.15;
-        const r = MOUNTAIN_R - 200 + (rng()-0.5)*300;
-        const cx = Math.cos(angle)*r, cz = Math.sin(angle)*r;
-        const h = 400 + rng()*400;
-        const peak = new THREE.Mesh(new THREE.ConeGeometry(200+rng()*100, h, 7), mat);
-        peak.position.set(cx, h/2, cz);
-        gtScene.add(peak);
-    }
-}
-
 // ── Weather ────────────────────────────────────────────────────────────
 let gtRainParticles = null;
 let gtShakeInterval = null;
@@ -1733,7 +1903,7 @@ function applyWeather(w) {
     };
     const cfg = configs[w] || configs.day;
     if (gtScene)  gtScene.background = new THREE.Color(cfg.sky);
-    if (gtScene)  gtScene.fog = new THREE.Fog(cfg.fog, GT_SIZE*0.4, GT_SIZE*1.1);
+    if (gtScene)  gtScene.fog = new THREE.Fog(cfg.fog, GT_SIZE*0.3, GT_SIZE*0.8);
     if (gtAmbLight) gtAmbLight.intensity = cfg.amb;
     if (gtSunLight) gtSunLight.intensity = cfg.sun;
 
@@ -1760,7 +1930,7 @@ function buildRain() {
     const geo   = new THREE.BufferGeometry();
     const verts = [];
     for (let i=0; i<count; i++) {
-        verts.push((Math.random()-0.5)*GT_SIZE*0.6, Math.random()*600, (Math.random()-0.5)*GT_SIZE*0.6);
+        verts.push((Math.random()-0.5)*GT_SIZE*0.3, Math.random()*800, (Math.random()-0.5)*GT_SIZE*0.3);
     }
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts,3));
     gtRainParticles = new THREE.Points(geo, new THREE.PointsMaterial({ color:0x88aacc, size:3, transparent:true, opacity:0.5 }));
@@ -1804,23 +1974,27 @@ function enterInterior(bldgIdx) {
     gtInInterior = true;
     gtInteriorBuilding = b;
 
-    if (!gtInteriorScene) {
-        gtInteriorScene  = new THREE.Scene();
-        gtInteriorScene.background = new THREE.Color(0x221a10);
-        gtInteriorCamera = makeCamera();
-        gtInteriorCamera.far = 3000;
-        gtInteriorCamera.updateProjectionMatrix();
-        gtInteriorScene.add(new THREE.AmbientLight(0xffeecc, 0.5));
-        const iL = new THREE.PointLight(0xffeeaa, 1.5, 600);
-        iL.position.set(0, 100, 0); gtInteriorScene.add(iL);
+    // Each building gets its own scene + camera, built once and cached
+    if (!b.scene) {
+        b.scene  = new THREE.Scene();
+        b.scene.background = new THREE.Color(0x221a10);
+        b.camera = makeCamera();
+        b.camera.far = 3000;
+        b.camera.updateProjectionMatrix();
+        b.scene.add(new THREE.AmbientLight(0xffeecc, 0.5));
+        const iL = new THREE.PointLight(0xffeeaa, 1.8, 800);
+        iL.position.set(0, b.sz.h * 0.8, 0); b.scene.add(iL);
+        buildInterior(b);
     }
 
-    // Build interior if not cached
-    if (!b.interior) b.interior = buildInterior(b);
+    gtInteriorScene  = b.scene;
+    gtInteriorCamera = b.camera;
+    activeScene  = b.scene;
+    activeCamera = b.camera;
 
-    activeScene  = gtInteriorScene;
-    activeCamera = gtInteriorCamera;
-    pos.x = 0; pos.y = 0; pos.z = 0;
+    // Spawn just inside the front door (south side, facing north)
+    pos.x = 0; pos.y = 0; pos.z = b.sz.d * 0.35;
+    yaw = Math.PI;
 
     document.getElementById('bsmt-interact').innerText = '[ E ] Exit building';
     document.getElementById('bsmt-interact').style.display = 'block';
@@ -1831,12 +2005,19 @@ function leaveInterior() {
     activeScene  = gtScene;
     activeCamera = gtCamera;
     document.getElementById('bsmt-interact').style.display = 'none';
-    // Restore HP
+    // Pop player out just in front of the door in world space
+    if (gtInteriorBuilding) {
+        const b = gtInteriorBuilding;
+        const cosR = Math.cos(b.rot), sinR = Math.sin(b.rot);
+        const localZ = b.sz.d / 2 + 80;
+        pos.x = b.x + localZ * sinR;
+        pos.z = b.z + localZ * cosR;
+        pos.y = getGTTerrainY(pos.x, pos.z);
+    }
 }
 
 function buildInterior(b) {
-    // All interiors are simple room(s) based on building type
-    const s    = gtInteriorScene;
+    const s    = b.scene;
     const W = b.sz.w*0.9, D = b.sz.d*0.9, H = b.sz.h*0.9, WT=8;
     const floorMat = new THREE.MeshLambertMaterial({ color:0x5c4020 });
     const wallMat  = new THREE.MeshLambertMaterial({ color:0x9a7a50 });
@@ -1924,8 +2105,6 @@ function buildInterior(b) {
             tryLoad('enemies/'+img, false);
         });
     }
-
-    return true;
 }
 
 function makeGTToilet() {
@@ -1965,13 +2144,12 @@ function spawnGTEnemies() {
     const spiderType = (w==='day') ? 'spider' : 'spiderRed';
     const spiderCount = w==='reckoning' ? 12 : w==='day' ? 6 : 8;
     for (let i=0;i<spiderCount;i++) {
-        const angle=rng()*Math.PI*2, r=200+rng()*TOWN_R*0.8;
+        const angle=rng()*Math.PI*2, r=600+rng()*TOWN_R*0.8;
         spawnGTEnemy(spiderType, Math.cos(angle)*r, Math.sin(angle)*r);
     }
 
     // Statues
     if (w==='day') {
-        // Rarely, inside buildings
         if (rng()<0.3) spawnGTEnemy('statue', (rng()-0.5)*TOWN_R*0.8, (rng()-0.5)*TOWN_R*0.8);
     } else if (w==='night') {
         for(let i=0;i<5;i++) spawnGTEnemy('statue',(rng()-0.5)*TOWN_R*1.2,(rng()-0.5)*TOWN_R*1.2);
@@ -1979,10 +2157,9 @@ function spawnGTEnemies() {
         for(let i=0;i<10;i++) spawnGTEnemy('statue',(rng()-0.5)*TOWN_R*1.5,(rng()-0.5)*TOWN_R*1.5);
     }
 
-    // False Buddies — night: deep desert, reckoning: everywhere
     if (w==='night') {
         for(let i=0;i<2;i++){
-            const angle=rng()*Math.PI*2, r=MOUNTAIN_R+200+rng()*600;
+            const angle=rng()*Math.PI*2, r=MOUNTAIN_R+600+rng()*1800;
             spawnGTEnemy('falseBuddy',Math.cos(angle)*r,Math.sin(angle)*r);
         }
     } else if (w==='reckoning') {
@@ -2117,7 +2294,7 @@ function updateGhostTown(dt) {
             }
         }
 
-        if (e.sprite) e.sprite.position.set(e.x, e.def.size*0.5, e.z);
+        if (e.sprite) e.sprite.position.set(e.x, getGTTerrainY(e.x, e.z) + e.def.size*0.5, e.z);
     });
 }
 
@@ -2151,8 +2328,8 @@ function checkGTDoors() {
             // near spawn — check for hub exit sign
         }
         // Hub portal on south edge of town
-        const dHub = Math.sqrt(pos.x*pos.x + (pos.z - (TOWN_R-80))**2);
-        if (dHub < 100) {
+        const dHub = Math.sqrt(pos.x*pos.x + (pos.z - (TOWN_R-240))**2);
+        if (dHub < 200) {
             prompt.innerText='[ E ] Return to Hub'; prompt.style.display='block';
             if(keys['KeyE']){keys['KeyE']=false; exitGhostTown();}
         } else {
@@ -2183,282 +2360,6 @@ function showGTMsg(msg) {
     const el=document.getElementById('bsmt-msg');
     if(!el) return;
     el.innerText=msg; el.style.display=msg?'block':'none';
-}
-
-// Room type enum strings (never shown to player)
-const RTYPES = ['meeting','darkplace','plain','generator','carousel',
-                'starting','falsemeeting','checkerboard','toilet',
-                'buddyspace','playroom','void','hostile'];
-
-// ── State ───────────────────────────────────────────────────────────
-let bsmtScene = null, bsmtCamera = null;
-let bsmtRooms = {};          // key "x,z" → room object
-let bsmtMeshes = {};         // key "x,z" → THREE.Group
-let generatorExists = false;
-let bsmtEnemies = [];
-let bsmtSprites = [];
-let falseBuddy   = null;
-let lightsOn     = true;
-let lightGuides  = [];
-let playerHP     = 100;
-const MAX_HP     = 100;
-let lastDmgTime  = 0;
-// per-room timers/state
-let sittingChair    = null;  // { roomKey, chair:0|1, startTime }
-let meetingInvited  = false;
-let carouselAngle   = 0;
-let toiletClicks    = 0;
-let checkerTimer    = 0;
-let checkerActive   = false;
-let carouselInRoom  = false;
-let bsmtInteract    = null;  // current interactable near player
-
-const CHECKER_MSGS = [
-    'Why are you still here?',
-    'Leave.',
-    "Don't you know? It's disrespectful to stare.",
-    'Get out, now.',
-    'This is not a resting place.',
-    'You are not safe here. Leave.'
-];
-
-// ── Raycaster for basement interactions ────────────────────────────
-const bRay  = new THREE.Raycaster();
-const bMouse = new THREE.Vector2(0,0);
-
-// ── Material helpers ───────────────────────────────────────────────
-function bMat(color, emissive=0, ei=0) {
-    return new THREE.MeshLambertMaterial({ color, emissive, emissiveIntensity: ei });
-}
-function bRustyMat(tint=0) {
-    // Slightly randomised rust colour
-    const base = 0x5a3820;
-    return new THREE.MeshLambertMaterial({ color: tint||base });
-}
-
-// ── Enter / exit ───────────────────────────────────────────────────
-function enterBasement() {
-    currentDim = 'basement';
-    document.getElementById('dim-label').innerText = '🔦 Basement';
-    document.getElementById('gen-btn').style.display = myName === 'bartelsfamily5' ? 'block' : 'none';
-    document.getElementById('gen-btn').innerText = '💡 Generate Basement';
-    document.getElementById('gen-btn').onclick = generateBasement;
-    document.getElementById('hp-bar').style.display = 'block';
-    clearEnemies();
-
-    if (!bsmtScene) buildBsmtScene();
-    activeScene  = bsmtScene;
-    activeCamera = bsmtCamera;
-
-    pos.x = 0; pos.y = 0; pos.z = ROOM_W * 0.65; // south edge, facing north
-    yaw = Math.PI; // facing into the room (north)
-    bsmtCamera.position.set(pos.x, EYE_H * 0.6, pos.z);
-
-    // Load rooms from Firebase
-    db.ref('cd_basement_rooms').once('value', snap => {
-        if (snap.exists()) {
-            const data = snap.val();
-            generatorExists = data.generatorExists || false;
-            Object.entries(data.rooms || {}).forEach(([k,v]) => {
-                bsmtRooms[k] = v;
-                buildRoomMesh(k, v);
-            });
-        } else {
-            // First time — just create starting room
-            const startRoom = makeRoom('starting', 0, 0);
-            bsmtRooms['0,0'] = startRoom;
-            buildRoomMesh('0,0', startRoom);
-        }
-    });
-
-    db.ref('cd_basement_lights').on('value', snap => {
-        lightsOn = snap.val() !== false;
-        applyLightState();
-    });
-    db.ref('cd_basement_falseBuddy').on('value', snap => {
-        if (!snap.exists()) { falseBuddy = null; return; }
-        falseBuddy = snap.val();
-    });
-
-    updateHPUI();
-}
-
-function exitBasement() {
-    document.getElementById('hp-bar').style.display = 'none';
-    document.getElementById('bsmt-flicker').style.display = 'none';
-    document.getElementById('bsmt-msg').style.display = 'none';
-    document.getElementById('bsmt-interact').style.display = 'none';
-    clearCarouselEffect();
-    db.ref('cd_basement_lights').off();
-    db.ref('cd_basement_falseBuddy').off();
-    bsmtEnemies.forEach(e => { if(e.sprite) bsmtScene?.remove(e.sprite); });
-    bsmtEnemies = [];
-    lightGuides.forEach(g => bsmtScene?.remove(g.mesh));
-    lightGuides = [];
-    enterHub();
-}
-
-function buildBsmtScene() {
-    bsmtScene  = new THREE.Scene();
-    bsmtScene.background = new THREE.Color(0x050508);
-    bsmtScene.fog = new THREE.FogExp2(0x050508, 0.0018);
-    bsmtCamera = makeCamera();
-    bsmtCamera.fov = 70;
-    bsmtCamera.updateProjectionMatrix();
-    // Dim ambient so walls are visible even before entering a lit room
-    bsmtScene.add(new THREE.AmbientLight(0x332211, 0.4));
-}
-
-// ── Room definition ─────────────────────────────────────────────────
-function makeRoom(type, gx, gz) {
-    // gx/gz = grid coordinates (each step = ROOM_W)
-    return {
-        type,
-        gx, gz,
-        doors: { N: false, S: false, E: false, W: false }, // connected doors
-        objects: [],
-    };
-}
-
-// ── Room mesh construction ───────────────────────────────────────────
-const MAT_RUST   = new THREE.MeshLambertMaterial({ color: 0x4a2e1a });
-const MAT_FLOOR  = new THREE.MeshLambertMaterial({ color: 0x2a1a0e });
-const MAT_CEIL   = new THREE.MeshLambertMaterial({ color: 0x1a1008 });
-const MAT_DOOR   = new THREE.MeshLambertMaterial({ color: 0x0a0a0a, transparent:true, opacity:0 }); // invisible gap
-
-const WALL_MATS = {
-    plain:         () => new THREE.MeshLambertMaterial({ color: 0x8b5a2b }),
-    meeting:       () => new THREE.MeshLambertMaterial({ color: 0x7a4520 }),
-    darkplace:     () => new THREE.MeshLambertMaterial({ color: 0x1a1008 }),
-    generator:     () => new THREE.MeshLambertMaterial({ color: 0x6a5530 }),
-    carousel:      () => new THREE.MeshLambertMaterial({ color: 0xcc5090, emissive:0x661848, emissiveIntensity:0.3 }),
-    starting:      () => new THREE.MeshLambertMaterial({ color: 0x8b5a2b }),
-    falsemeeting:  () => new THREE.MeshLambertMaterial({ color: 0x5a1010 }),
-    checkerboard:  () => null,
-    toilet:        () => new THREE.MeshLambertMaterial({ color: 0x7a6040 }),
-    buddyspace:    () => new THREE.MeshLambertMaterial({ color: 0x2a7a3a }),
-    playroom:      () => new THREE.MeshLambertMaterial({ color: 0xaa4488 }),
-    void:          () => new THREE.MeshBasicMaterial ({ color: 0xffffff }),
-    hostile:       () => new THREE.MeshLambertMaterial({ color: 0x7a2020 }),
-};
-
-function buildRoomMesh(key, room) {
-    if (bsmtMeshes[key]) return;
-    const grp = new THREE.Group();
-    const wx  = room.gx * ROOM_W;
-    const wz  = room.gz * ROOM_W;
-    const RW  = ROOM_W, RH = ROOM_H, RD = ROOM_W, T = WALL_T;
-    const half = RW / 2;
-
-    const wallMatFn = WALL_MATS[room.type] || WALL_MATS.plain;
-    let wMat = wallMatFn();
-
-    if (room.type === 'checkerboard') {
-        const c = document.createElement('canvas'); c.width = c.height = 256;
-        const ctx2 = c.getContext('2d');
-        for(let ci=0;ci<8;ci++) for(let cj=0;cj<8;cj++) {
-            ctx2.fillStyle = (ci+cj)%2===0 ? '#111' : '#333';
-            ctx2.fillRect(ci*32,cj*32,32,32);
-        }
-        const tex = new THREE.CanvasTexture(c);
-        tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(2,1);
-        wMat = new THREE.MeshLambertMaterial({ map: tex });
-    }
-    if (room.type === 'void') wMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-
-    // Floor
-    const floorMat = room.type === 'buddyspace'
-        ? new THREE.MeshLambertMaterial({ color: 0x2a6a2a }) : MAT_FLOOR;
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(RW, RD), floorMat);
-    floor.rotation.x = -Math.PI/2; grp.add(floor);
-
-    // Ceiling
-    const ceil = new THREE.Mesh(new THREE.PlaneGeometry(RW, RD), MAT_CEIL);
-    ceil.rotation.x = Math.PI/2; ceil.position.y = RH; grp.add(ceil);
-
-    // Helper: add a solid wall slab
-    function slab(w, h, d, x, y, z) {
-        const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wMat);
-        m.position.set(x, y, z); grp.add(m);
-    }
-
-    // North wall (z = -half)
-    if (room.doors.N) {
-        const sw = (RW - DOOR_W) / 2, topH = RH - DOOR_H;
-        slab(sw,      RH,    T,  -half + sw/2,          RH/2,           -half);
-        slab(sw,      RH,    T,   half - sw/2,           RH/2,           -half);
-        slab(DOOR_W,  topH,  T,   0,                     DOOR_H + topH/2,-half);
-    } else {
-        slab(RW, RH, T, 0, RH/2, -half);
-    }
-
-    // South wall (z = +half)
-    if (room.doors.S) {
-        const sw = (RW - DOOR_W) / 2, topH = RH - DOOR_H;
-        slab(sw,      RH,    T,  -half + sw/2,          RH/2,           half);
-        slab(sw,      RH,    T,   half - sw/2,           RH/2,           half);
-        slab(DOOR_W,  topH,  T,   0,                     DOOR_H + topH/2, half);
-    } else {
-        slab(RW, RH, T, 0, RH/2, half);
-    }
-
-    // East wall (x = +half)
-    if (room.doors.E) {
-        const sw = (RD - DOOR_W) / 2, topH = RH - DOOR_H;
-        slab(T, RH,   sw,   half,  RH/2,            -half + sw/2);
-        slab(T, RH,   sw,   half,  RH/2,             half - sw/2);
-        slab(T, topH, DOOR_W, half, DOOR_H + topH/2, 0);
-    } else {
-        slab(T, RH, RD, half, RH/2, 0);
-    }
-
-    // West wall (x = -half)
-    if (room.doors.W) {
-        const sw = (RD - DOOR_W) / 2, topH = RH - DOOR_H;
-        slab(T, RH,   sw,  -half,  RH/2,            -half + sw/2);
-        slab(T, RH,   sw,  -half,  RH/2,             half - sw/2);
-        slab(T, topH, DOOR_W, -half, DOOR_H + topH/2, 0);
-    } else {
-        slab(T, RH, RD, -half, RH/2, 0);
-    }
-
-    addLightbulb(grp, 0, RH - 10, 0, room.type);
-    addRoomObjects(grp, room, RW, RH, RD);
-
-    grp.position.set(wx, 0, wz);
-    bsmtScene.add(grp);
-    bsmtMeshes[key] = grp;
-
-    spawnRoomEnemies(room, wx, wz, RW, RD);
-}
-
-function addLightbulb(grp, x, y, z, roomType) {
-    const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.5,15,4), new THREE.MeshBasicMaterial({color:0x222}));
-    cord.position.set(x, y+7, z); grp.add(cord);
-    const bulb = new THREE.Mesh(new THREE.SphereGeometry(6,8,8), new THREE.MeshBasicMaterial({color:0xffffaa}));
-    bulb.position.set(x, y, z);
-    bulb.userData.isBulb = true; bulb.userData.roomType = roomType;
-    grp.add(bulb);
-
-    if (roomType === 'darkplace') {
-        // Dark room: light EXISTS but starts at intensity 0, flicker turns it on briefly
-        const pl = new THREE.PointLight(0xffeeaa, 0, ROOM_W * 1.1);
-        pl.position.set(x, y, z);
-        pl.userData.isDarkRoomLight = true;
-        grp.add(pl);
-    } else {
-        const pl = new THREE.PointLight(0xffeeaa, 1.8, ROOM_W * 0.9);
-        pl.position.set(x, y, z);
-        pl.userData.isRoomLight = true;
-        grp.add(pl);
-    }
-
-    if (roomType === 'generator') {
-        const gl = new THREE.PointLight(0xffcc00, 2.5, ROOM_W * 1.2);
-        gl.position.set(x, y-20, z);
-        gl.userData.generatorGlow = true;
-        grp.add(gl);
-    }
 }
 
 function loop() {
