@@ -2904,14 +2904,14 @@ function generateMoon() {
         }
     }
 
-    // ── Also scatter a few random lone craters anywhere ───────────
+    // ── Scatter lots of random lone craters everywhere ──────────────
     const loneCraters = [];
-    for (let i = 0; i < 4 + Math.floor(rng()*4); i++) {
+    for (let i = 0; i < 20 + Math.floor(rng()*15); i++) {
         loneCraters.push({
-            cu: 0.05 + rng()*0.9, cv: 0.05 + rng()*0.9,
-            r:  0.008 + rng()*0.014,
-            depth: -(30 + rng()*70),
-            rimH:  15 + rng()*30,
+            cu: 0.03 + rng()*0.94, cv: 0.03 + rng()*0.94,
+            r:  0.006 + rng()*0.022,
+            depth: -(25 + rng()*110),
+            rimH:  12 + rng()*50,
         });
     }
     const allSmallCraters = [...craterFields, ...loneCraters];
@@ -2923,14 +2923,20 @@ function generateMoon() {
             const u = ui/segs, v = vi/segs;
             const wx = (u-0.5)*MOON_SIZE*2, wz = (v-0.5)*MOON_SIZE*2;
 
-            // Base terrain — multiple frequencies for bumpy imperfect look
-            const f1 = 1/7000, f2 = 1/2500, f3 = 1/900, f4 = 1/300;
+            // Base terrain — many frequencies, high amplitude, very bumpy
+            const f1=1/7000, f2=1/2500, f3=1/900, f4=1/300, f5=1/120, f6=1/50;
             let h = (Math.sin(wx*f1*1.3+0.7)*Math.cos(wz*f1*0.9+0.3) +
-                     Math.sin(wx*f1*2.4+1.9)*Math.cos(wz*f1*1.8+0.5)) * 90
+                     Math.sin(wx*f1*2.4+1.9)*Math.cos(wz*f1*1.8+0.5) +
+                     Math.cos(wx*f1*0.7+3.1)*Math.sin(wz*f1*1.2+2.4)) * 200
                   + (Math.sin(wx*f2*1.1+2.1)*Math.cos(wz*f2*1.4+0.8) +
-                     Math.cos(wx*f2*2.3+0.4)*Math.sin(wz*f2*1.9+1.2)) * 45
-                  + (Math.sin(wx*f3*1.7+1.3)*Math.cos(wz*f3*2.1+0.6)) * 18
-                  + (Math.sin(wx*f4*2.2+0.9)*Math.cos(wz*f4*1.6+2.3)) * 7;
+                     Math.cos(wx*f2*2.3+0.4)*Math.sin(wz*f2*1.9+1.2) +
+                     Math.sin(wx*f2*3.1+1.5)*Math.cos(wz*f2*2.8+0.3)) * 100
+                  + (Math.sin(wx*f3*1.7+1.3)*Math.cos(wz*f3*2.1+0.6) +
+                     Math.cos(wx*f3*2.9+0.8)*Math.sin(wz*f3*1.4+2.1)) * 50
+                  + (Math.sin(wx*f4*2.2+0.9)*Math.cos(wz*f4*1.6+2.3) +
+                     Math.sin(wx*f4*3.3+1.7)*Math.cos(wz*f4*2.5+0.4)) * 22
+                  + (Math.sin(wx*f5*1.8+0.5)*Math.cos(wz*f5*2.3+1.1)) * 10
+                  + (Math.sin(wx*f6*2.1+1.4)*Math.cos(wz*f6*1.9+0.7)) * 4;
 
             // Colony centre — flatten but leave slight imperfection
             const colonyCenterDist = Math.sqrt((u-0.5)**2+(v-0.5)**2);
