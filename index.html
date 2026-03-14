@@ -496,7 +496,7 @@ let hubScene, hubCamera;
 const PORTALS = [
     { id: 'grasslands', label: '🌿 Grasslands',       color: 0x2ed573, angle: 0,           locked: false },
     { id: 'ghosttown',  label: '🏚️ Ghost Town',        color: 0xd4a96a, angle: Math.PI*2/3, locked: false },
-    { id: 'dim3',       label: '🔒 ???',               color: 0x555566, angle: Math.PI*4/3, locked: true  },
+    { id: 'moon',       label: '🌕 Moon',               color: 0xccccaa, angle: Math.PI*4/3, locked: false },
 ];
 const PORTAL_DIST = 220;
 const ENTER_DIST  = 90;
@@ -1378,6 +1378,7 @@ function checkPortals() {
                     keys['KeyE'] = false;
                     if (nearest.data.id === 'grasslands') enterGrasslands();
                     else if (nearest.data.id === 'ghosttown') enterGhostTown();
+                    else if (nearest.data.id === 'moon') enterMoon();
                 }
             }
         } else {
@@ -1397,6 +1398,8 @@ function checkPortals() {
         }
     } else if (currentDim === 'ghosttown') {
         checkGTDoors();
+    } else if (currentDim === 'moon') {
+        checkMoonPortal();
     }
 }
 
@@ -1456,6 +1459,11 @@ function update(dt) {
             if (!blockedZ) pos.z = nz;
         }
         pos.y = getGTTerrainY(pos.x, pos.z);
+    } else if (currentDim === 'moon') {
+        newX = Math.max(-MOON_SIZE+50, Math.min(MOON_SIZE-50, newX));
+        newZ = Math.max(-MOON_SIZE+50, Math.min(MOON_SIZE-50, newZ));
+        pos.x = newX; pos.z = newZ;
+        pos.y = getMoonTerrainY(pos.x, pos.z);
     } else {
         // Grasslands — clamp to terrain bounds
         newX = Math.max(-G_SIZE + 50, Math.min(G_SIZE - 50, newX));
@@ -1493,7 +1501,7 @@ function update(dt) {
             activeScene.add(mesh);
             playerMeshes[id] = mesh;
         }
-        const groundY = currentDim === 'grasslands' ? getTerrainY(p.x, p.z) : currentDim === 'ghosttown' ? getGTTerrainY(p.x, p.z) : 0;
+        const groundY = currentDim === 'grasslands' ? getTerrainY(p.x, p.z) : currentDim === 'ghosttown' ? getGTTerrainY(p.x, p.z) : currentDim === 'moon' ? getMoonTerrainY(p.x, p.z) : 0;
         playerMeshes[id].position.set(p.x, groundY, p.z);
         playerMeshes[id].rotation.y = p.yaw || 0;
     }
@@ -1507,6 +1515,7 @@ function update(dt) {
     updateNameTags();
     updateEnemies(dt);
     if (currentDim === 'ghosttown') updateGhostTown(dt);
+    if (currentDim === 'moon') updateMoon(dt);
     if (currentDim === 'grasslands') pushEnemyState('grasslands');
     else if (currentDim === 'ghosttown') pushEnemyState('ghosttown');
 
@@ -1541,7 +1550,7 @@ function updateNameTags() {
             nameTags[id] = el;
         }
         const tag = nameTags[id];
-        const groundY = currentDim === 'grasslands' ? getTerrainY(p.x, p.z) : currentDim === 'ghosttown' ? getGTTerrainY(p.x, p.z) : 0;
+        const groundY = currentDim === 'grasslands' ? getTerrainY(p.x, p.z) : currentDim === 'ghosttown' ? getGTTerrainY(p.x, p.z) : currentDim === 'moon' ? getMoonTerrainY(p.x, p.z) : 0;
         const wp  = new THREE.Vector3(p.x, groundY + 75, p.z);
         const prj = wp.clone().project(activeCamera);
         const sx  = (prj.x * 0.5 + 0.5) * W;
@@ -2583,7 +2592,7 @@ function updateGhostTown(dt) {
             }
             // Deal big damage
             if (pdist < 120 && now - e.lastHit > 2500) {
-                e.lastHit = now; dealGTDmg(75); showGTMsg('💀 The Mega Spider got you!'); setTimeout(()=>showGTMsg(''),2500);
+                e.lastHit = now; dealGTDmg(75); showGTMsg('🕷️ The Mega Spider got you!'); setTimeout(()=>showGTMsg(''),2500);
             }
             // Occasionally spawn a hostile spider (max every 8s, despawn after 15s)
             if (!e.spawnCooldown) e.spawnCooldown = 0;
@@ -2718,7 +2727,7 @@ function showPetNotif(msg) {
 }
 
 function updateHPUI() {
-    const hp = currentDim === 'ghosttown' ? playerHP_gt : 100;
+    const hp = currentDim === 'ghosttown' ? playerHP_gt : currentDim === 'moon' ? playerHP_moon : 100;
     document.getElementById('hp-val').innerText = Math.ceil(hp);
     const pct = hp;
     const fill = document.getElementById('hp-fill');
@@ -2733,6 +2742,491 @@ function showMBDamage() {
     document.body.appendChild(flash);
     setTimeout(() => flash.remove(), 200);
 }
+// ════════════════════════════════════════════════════════════════════
+// DIMENSION 3 — THE MOON
+// ════════════════════════════════════════════════════════════════════
+
+const MOON_SIZE        = 45000;  // half-size (2.5x Ghost Town's 18000)
+const MOON_TERRAIN_SEGS = 200;
+const MOON_SPEED       = SPEED;
+
+// ── State ─────────────────────────────────────────────────────────
+let moonScene = null, moonCamera = null;
+let moonTerrainMesh = null;
+let moonTerrainHeights = null;
+let moonEnemies = [];
+let playerHP_moon = 100;
+let moonDmgTime = 0;
+let moonGenerated = false;
+// Mimic state
+let mimicTarget = null;       // myId if targeting this client
+let mimicMode = 'mountain';   // 'mountain'|'stalk'|'hunt'|'disguise'
+let mimicStalkTimer = 0;
+let mimicMountainPos = { x: 0, z: 0 }; // set on generate
+
+// ── Enter ─────────────────────────────────────────────────────────
+function enterMoon() {
+    currentDim = 'moon';
+    document.getElementById('dim-label').innerText = '🌕 Moon';
+    document.getElementById('gen-btn').style.display = myName === 'bartelsfamily5' ? 'block' : 'none';
+    document.getElementById('gen-btn').innerText = '🌕 Generate Moon';
+    document.getElementById('gen-btn').onclick = generateMoon;
+    document.getElementById('hp-bar').style.display = 'block';
+    playerHP_moon = 100; updateHPUI();
+
+    if (!moonScene) buildMoonScene();
+    activeScene  = moonScene;
+    activeCamera = moonCamera;
+    pos.x = 0; pos.y = 0; pos.z = 0;
+
+    // Load saved terrain
+    db.ref('cd_moon').once('value', snap => {
+        if (snap.exists()) applyMoonData(snap.val());
+        else { pos.x = 0; pos.z = 0; }
+    });
+
+    // Mimic sync
+    db.ref('cd_moon_mimic').on('value', snap => {
+        if (snap.exists()) applyMimicState(snap.val());
+    });
+}
+
+function exitMoon() {
+    document.getElementById('hp-bar').style.display = 'none';
+    document.getElementById('weather-timer').style.display = 'none';
+    db.ref('cd_moon_mimic').off();
+    clearMoonEnemies();
+    enterHub();
+}
+
+// ── Scene ─────────────────────────────────────────────────────────
+function buildMoonScene() {
+    moonScene = new THREE.Scene();
+    moonScene.background = new THREE.Color(0x000008);
+    moonScene.fog = new THREE.FogExp2(0x000008, 0.000018);
+    moonCamera = makeCamera();
+    moonCamera.far = 80000;
+    moonCamera.updateProjectionMatrix();
+
+    moonScene.add(new THREE.AmbientLight(0x334455, 0.5));
+    const sun = new THREE.DirectionalLight(0xfff0dd, 0.9);
+    sun.position.set(5000, 8000, 3000);
+    moonScene.add(sun);
+
+    // Stars
+    const starGeo = new THREE.BufferGeometry();
+    const sv = [];
+    for (let i = 0; i < 3000; i++) {
+        const th = Math.random()*Math.PI*2, ph = Math.acos(2*Math.random()-1);
+        const r = 60000 + Math.random()*10000;
+        sv.push(r*Math.sin(ph)*Math.cos(th), r*Math.cos(ph), r*Math.sin(ph)*Math.sin(th));
+    }
+    starGeo.setAttribute('position', new THREE.Float32BufferAttribute(sv, 3));
+    moonScene.add(new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 8 })));
+
+    // Terrain
+    const geo = new THREE.PlaneGeometry(MOON_SIZE*2, MOON_SIZE*2, MOON_TERRAIN_SEGS, MOON_TERRAIN_SEGS);
+    moonTerrainMesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x888880, vertexColors: false }));
+    moonTerrainMesh.rotation.x = -Math.PI/2;
+    moonTerrainMesh.receiveShadow = true;
+    moonScene.add(moonTerrainMesh);
+}
+
+// ── Terrain helpers ───────────────────────────────────────────────
+function getMoonTerrainY(wx, wz) {
+    if (!moonTerrainMesh || !moonTerrainHeights) return 0;
+    const u = Math.max(0, Math.min(MOON_TERRAIN_SEGS, Math.round((wx/(MOON_SIZE*2)+0.5)*MOON_TERRAIN_SEGS)));
+    const v = Math.max(0, Math.min(MOON_TERRAIN_SEGS, Math.round((wz/(MOON_SIZE*2)+0.5)*MOON_TERRAIN_SEGS)));
+    return moonTerrainHeights[v]?.[u] ?? 0;
+}
+
+// ── Generation ────────────────────────────────────────────────────
+function generateMoon() {
+    if (myName !== 'bartelsfamily5') return;
+    const rng = seededRand(Date.now() % 9999);
+    const segs = MOON_TERRAIN_SEGS;
+    const heights = [];
+
+    // Biome zones
+    // 1. Martian Colony — centre, flat
+    // 2. Big Crater — guaranteed, placed off-centre
+    // 3. Mimic Grounds — one large mountain, placed far from centre
+    // 4. Crater Field — 5-10 small craters scattered elsewhere
+
+    // Big Crater centre (off-centre)
+    const bigCraterAngle = rng()*Math.PI*2;
+    const bigCraterDist  = 0.18 + rng()*0.08; // normalised 0-1 from map centre
+    const bigCX = Math.cos(bigCraterAngle)*bigCraterDist + 0.5;
+    const bigCZ = Math.sin(bigCraterAngle)*bigCraterDist + 0.5;
+    const bigCR = 0.12 + rng()*0.06; // radius in normalised space
+    const bigCDepth = -(400 + rng()*200);
+    const bigCRimH  = 120 + rng()*80;
+
+    // Mimic Mountain — far side
+    const mimicAngle = bigCraterAngle + Math.PI + (rng()-0.5)*0.5;
+    const mimicDist  = 0.35 + rng()*0.08;
+    const mimicU = Math.cos(mimicAngle)*mimicDist + 0.5;
+    const mimicV = Math.sin(mimicAngle)*mimicDist + 0.5;
+    const mimicMtnR = 0.05 + rng()*0.03;
+    const mimicMtnH = 1200 + rng()*600;
+    // Store world-space mimic mountain peak
+    mimicMountainPos = {
+        x: (mimicU - 0.5)*MOON_SIZE*2,
+        z: (mimicV - 0.5)*MOON_SIZE*2
+    };
+
+    // Small craters (crater field)
+    const smallCraters = [];
+    const numSmall = 5 + Math.floor(rng()*6);
+    for (let i = 0; i < numSmall; i++) {
+        smallCraters.push({
+            cu: 0.1 + rng()*0.8, cv: 0.1 + rng()*0.8,
+            r:  0.02 + rng()*0.03,
+            depth: -(60 + rng()*120),
+            rimH:   30 + rng()*40,
+        });
+    }
+
+    for (let vi = 0; vi <= segs; vi++) {
+        heights.push([]);
+        for (let ui = 0; ui <= segs; ui++) {
+            const u = ui/segs, v = vi/segs;
+            const wx = (u-0.5)*MOON_SIZE*2, wz = (v-0.5)*MOON_SIZE*2;
+
+            // Gentle hills base
+            const freq = 1/8000;
+            let h = (Math.sin(wx*freq*1.3+0.7)*Math.cos(wz*freq*0.9+0.3) +
+                     Math.sin(wx*freq*3.1+1.4)*Math.cos(wz*freq*2.7+0.8)) * 40;
+
+            // Colony centre — flatten
+            const colonyCenterDist = Math.sqrt((u-0.5)**2+(v-0.5)**2);
+            if (colonyCenterDist < 0.08) {
+                h *= Math.max(0, (colonyCenterDist - 0.03)/0.05);
+            }
+
+            // Big crater
+            const bdu = u-bigCX, bdv = v-bigCZ;
+            const bdist = Math.sqrt(bdu*bdu+bdv*bdv);
+            if (bdist < bigCR*1.3) {
+                const t = bdist/bigCR;
+                if (t < 0.7) {
+                    // Bowl floor
+                    const tb = t/0.7; const ts = tb*tb*(3-2*tb);
+                    h = h*(1-ts) + bigCDepth*ts;
+                } else {
+                    // Rim
+                    const tr = (t-0.7)/0.6; const ts = Math.max(0, 1-tr*tr);
+                    h += bigCRimH*ts;
+                }
+            }
+
+            // Mimic mountain
+            const mdu = u-mimicU, mdv = v-mimicV;
+            const mdist = Math.sqrt(mdu*mdu+mdv*mdv);
+            if (mdist < mimicMtnR*1.5) {
+                const t = 1 - mdist/mimicMtnR;
+                if (t > 0) {
+                    const ts = Math.max(0,t)*Math.max(0,t)*(3-2*Math.max(0,t));
+                    const ridge = Math.sin(wx*freq*6+2.1)*Math.cos(wz*freq*5+1.3)*120;
+                    h = h*(1-ts) + (mimicMtnH+ridge)*ts;
+                }
+            }
+
+            // Small craters
+            for (const sc of smallCraters) {
+                const sdu = u-sc.cu, sdv = v-sc.cv;
+                const sdist = Math.sqrt(sdu*sdu+sdv*sdv);
+                if (sdist < sc.r*1.3) {
+                    const t = sdist/sc.r;
+                    if (t < 0.7) {
+                        const tb = t/0.7; const ts = tb*tb*(3-2*tb);
+                        h = h*(1-ts) + sc.depth*ts;
+                    } else {
+                        const tr = (t-0.7)/0.6; const tts = Math.max(0,1-tr*tr);
+                        h += sc.rimH*tts;
+                    }
+                }
+            }
+
+            heights[vi].push(h);
+        }
+    }
+
+    moonTerrainHeights = heights;
+    applyMoonHeights(heights);
+
+    // Roads in colony
+    buildMoonRoads();
+
+    // Save
+    const flat = heights.map(row => row.map(v2 => Math.round(v2*10)/10));
+    db.ref('cd_moon').set({
+        heights: flat, segs,
+        mimicMountain: mimicMountainPos,
+        generated: Date.now()
+    });
+
+    clearMoonEnemies();
+    spawnMoonEnemies(rng);
+    moonGenerated = true;
+    showPetNotif('🌕 Moon generated!');
+}
+
+function applyMoonHeights(heights) {
+    const segs = MOON_TERRAIN_SEGS;
+    const positions = moonTerrainMesh.geometry.attributes.position;
+    const colorArr = [];
+    for (let vi = 0; vi <= segs; vi++) {
+        for (let ui = 0; ui <= segs; ui++) {
+            const idx = vi*(segs+1)+ui;
+            const h = heights[vi]?.[ui] ?? 0;
+            positions.setZ(idx, h);
+            // Colour by height
+            let r, g, b;
+            if (h > 600)       { r=0.85; g=0.84; b=0.82; } // peak
+            else if (h > 200)  { r=0.70; g=0.69; b=0.67; } // upper slope
+            else if (h < -100) { r=0.42; g=0.41; b=0.40; } // crater floor
+            else               { r=0.58; g=0.57; b=0.55; } // plains
+            colorArr.push(r, g, b);
+        }
+    }
+    positions.needsUpdate = true;
+    moonTerrainMesh.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colorArr, 3));
+    moonTerrainMesh.material.vertexColors = true;
+    moonTerrainMesh.geometry.computeVertexNormals();
+}
+
+function buildMoonRoads() {
+    const roadMat = new THREE.MeshLambertMaterial({ color: 0x666660 });
+    const roadLen = 6000;
+    [-1,1].forEach(dir => {
+        const r1 = new THREE.Mesh(new THREE.PlaneGeometry(200, roadLen), roadMat);
+        r1.rotation.x = -Math.PI/2; r1.position.set(dir*800, 2, 0);
+        moonScene.add(r1);
+        const r2 = new THREE.Mesh(new THREE.PlaneGeometry(200, roadLen), roadMat);
+        r2.rotation.x = -Math.PI/2; r2.rotation.z = Math.PI/2; r2.position.set(0, 2, dir*800);
+        moonScene.add(r2);
+    });
+}
+
+function applyMoonData(data) {
+    if (data.heights) {
+        moonTerrainHeights = data.heights;
+        applyMoonHeights(data.heights);
+    }
+    if (data.mimicMountain) mimicMountainPos = data.mimicMountain;
+    clearMoonEnemies();
+    spawnMoonEnemies(seededRand(42));
+    moonGenerated = true;
+    // Spawn player in colony centre
+    pos.x = 0; pos.y = getMoonTerrainY(0,0); pos.z = 0;
+}
+
+// ── Enemies ───────────────────────────────────────────────────────
+const MOON_ENEMY_DEFS = {
+    martian1: { img:'enemies/martian1.png', size:70, speed:MOON_SPEED*0.75, dmg:0,  hostile:false },
+    martian2: { img:'enemies/martian2.png', size:70, speed:MOON_SPEED*0.75, dmg:0,  hostile:false },
+    martian3: { img:'enemies/martian3.png', size:70, speed:MOON_SPEED*0.75, dmg:0,  hostile:false },
+    mimic:    { img:'enemies/mimic.png',    size:120, speed:MOON_SPEED*1.1,  dmg:50, hostile:true  },
+};
+
+function clearMoonEnemies() {
+    moonEnemies.forEach(e => { if (e.sprite) moonScene?.remove(e.sprite); });
+    moonEnemies = [];
+}
+
+function spawnMoonEnemies(rng) {
+    clearMoonEnemies();
+    // Martians in colony (centre) — 15-20
+    const colCount = 15 + Math.floor(rng()*6);
+    for (let i = 0; i < colCount; i++) {
+        const angle = rng()*Math.PI*2, r = 300 + rng()*4000;
+        spawnMoonEnemy(['martian1','martian2','martian3'][Math.floor(rng()*3)],
+            Math.cos(angle)*r, Math.sin(angle)*r);
+    }
+    // Martians in crater field — 6-10
+    const cfCount = 6 + Math.floor(rng()*5);
+    for (let i = 0; i < cfCount; i++) {
+        const angle = rng()*Math.PI*2, r = 8000 + rng()*10000;
+        spawnMoonEnemy(['martian1','martian2','martian3'][Math.floor(rng()*3)],
+            Math.cos(angle)*r, Math.sin(angle)*r);
+    }
+    // Mimic — on its mountain
+    spawnMoonEnemy('mimic', mimicMountainPos.x, mimicMountainPos.z);
+}
+
+function spawnMoonEnemy(type, wx, wz) {
+    const def = MOON_ENEMY_DEFS[type];
+    if (!def) return;
+    const enemy = {
+        type, def, x: wx, z: wz,
+        y: getMoonTerrainY(wx, wz),
+        sprite: null,
+        vx: (Math.random()-0.5)*def.speed,
+        vz: (Math.random()-0.5)*def.speed,
+        // Mimic-specific
+        mode: type==='mimic' ? 'mountain' : null,
+        stalkTimer: 0,
+        disguiseColor: null,
+        lastHit: 0,
+        opacity: 1,
+    };
+    getSpriteTexture(type, def, tex => {
+        const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, depthWrite: false, sizeAttenuation: true });
+        const sp = new THREE.Sprite(mat);
+        sp.scale.set(def.size, def.size, 1);
+        sp.position.set(wx, getMoonTerrainY(wx,wz)+def.size*0.5, wz);
+        moonScene.add(sp);
+        enemy.sprite = sp;
+    });
+    moonEnemies.push(enemy);
+    return enemy;
+}
+
+// ── Update ────────────────────────────────────────────────────────
+function updateMoon(dt) {
+    if (currentDim !== 'moon') return;
+    const now = Date.now();
+
+    moonEnemies.forEach(e => {
+        if (!e.sprite) return;
+        const pdx = pos.x - e.x, pdz = pos.z - e.z;
+        const pdist = Math.sqrt(pdx*pdx+pdz*pdz);
+
+        if (e.type === 'mimic') {
+            updateMimic(e, dt, pdx, pdz, pdist, now);
+        } else {
+            // Martians — passive wander
+            if (Math.random() < 0.008) {
+                e.vx = (Math.random()-0.5)*e.def.speed;
+                e.vz = (Math.random()-0.5)*e.def.speed;
+            }
+            e.x += e.vx*dt; e.z += e.vz*dt;
+            // Clamp to map
+            e.x = Math.max(-MOON_SIZE+50, Math.min(MOON_SIZE-50, e.x));
+            e.z = Math.max(-MOON_SIZE+50, Math.min(MOON_SIZE-50, e.z));
+        }
+
+        e.y = getMoonTerrainY(e.x, e.z);
+        if (e.sprite) e.sprite.position.set(e.x, e.y+e.def.size*0.5, e.z);
+        if (e.sprite && e.opacity !== undefined) e.sprite.material.opacity = e.opacity;
+    });
+}
+
+function updateMimic(e, dt, pdx, pdz, pdist, now) {
+    const mtnDist = Math.sqrt(
+        (e.x-mimicMountainPos.x)**2+(e.z-mimicMountainPos.z)**2
+    );
+
+    if (e.mode === 'mountain') {
+        // Stay on mountain, scan for players within range
+        e.x = mimicMountainPos.x; e.z = mimicMountainPos.z;
+        e.opacity = 1;
+        if (pdist < 8000) {
+            // Choose this player as target — teleport behind them
+            e.mode = 'stalk';
+            e.stalkTimer = 20 + Math.random()*10;
+            // Teleport behind player
+            const ang = Math.atan2(pdz, pdx) + Math.PI; // opposite direction
+            const stalkDist = 1200 + Math.random()*600;
+            e.x = pos.x + Math.cos(ang)*stalkDist;
+            e.z = pos.z + Math.sin(ang)*stalkDist;
+            // Broadcast stalk start to all players
+            db.ref('cd_moon_mimic').set({ mode:'stalk', targetId: myId, x: e.x, z: e.z });
+        }
+
+    } else if (e.mode === 'stalk') {
+        e.opacity = (mimicTarget === myId) ? 1 : 0.5; // half transparent for non-targets
+        // Slowly follow keeping distance
+        if (pdist > 1000) {
+            const len = pdist || 1;
+            e.x += (pdx/len)*e.def.speed*0.3*dt;
+            e.z += (pdz/len)*e.def.speed*0.3*dt;
+        }
+        e.stalkTimer -= dt;
+        if (e.stalkTimer <= 0) {
+            e.mode = 'hunt';
+            db.ref('cd_moon_mimic').set({ mode:'hunt', targetId: myId, x: e.x, z: e.z });
+        }
+
+    } else if (e.mode === 'hunt') {
+        e.opacity = 1;
+        const len = pdist || 1;
+        e.x += (pdx/len)*e.def.speed*dt;
+        e.z += (pdz/len)*e.def.speed*dt;
+        if (pdist < 80 && now - e.lastHit > 1500) {
+            e.lastHit = now;
+            dealMoonDmg(50, '💀 The Mimic got you!');
+            if (playerHP_moon <= 0) {
+                // Mimic becomes this player's disguise
+                e.mode = 'disguise';
+                e.disguiseColor = myColor;
+                db.ref('cd_moon_mimic').set({ mode:'disguise', color: myColor, x: e.x, z: e.z });
+            }
+        }
+
+    } else if (e.mode === 'disguise') {
+        e.opacity = 1;
+        // Wander toward nearest player
+        if (pdist > 200) {
+            const len = pdist || 1;
+            e.x += (pdx/len)*e.def.speed*0.9*dt;
+            e.z += (pdz/len)*e.def.speed*0.9*dt;
+        }
+        if (pdist < 80 && now - e.lastHit > 2000) {
+            e.lastHit = now;
+            dealMoonDmg(20, 'RUNRUNRUNRUN');
+        }
+    }
+}
+
+function applyMimicState(data) {
+    mimicMode = data.mode;
+    mimicTarget = data.targetId || null;
+    const mimic = moonEnemies.find(e => e.type === 'mimic');
+    if (!mimic) return;
+    mimic.mode = data.mode;
+    if (data.x !== undefined) { mimic.x = data.x; mimic.z = data.z; }
+    if (data.mode === 'stalk') {
+        mimic.stalkTimer = 20 + Math.random()*10;
+        mimic.opacity = (mimicTarget === myId) ? 1 : 0.5;
+    }
+    if (data.mode === 'disguise' && data.color) {
+        mimic.disguiseColor = data.color;
+        // Tint sprite to player colour
+        if (mimic.sprite) mimic.sprite.material.color.set(data.color);
+    }
+}
+
+function dealMoonDmg(amount, msg) {
+    const now = Date.now();
+    if (now - moonDmgTime < 500) return;
+    moonDmgTime = now;
+    playerHP_moon = Math.max(0, playerHP_moon - amount);
+    updateHPUI();
+    showPetNotif(msg);
+    const flash = document.createElement('div');
+    flash.style.cssText = 'position:fixed;inset:0;background:rgba(235,77,75,0.3);pointer-events:none;z-index:9000;';
+    document.body.appendChild(flash); setTimeout(()=>flash.remove(), 180);
+    if (playerHP_moon <= 0) {
+        showPetNotif('You died on the Moon... returning to Hub.');
+        setTimeout(()=>{ playerHP_moon=100; exitMoon(); }, 2500);
+    }
+}
+
+// ── Portal ────────────────────────────────────────────────────────
+function checkMoonPortal() {
+    const prompt = document.getElementById('portal-prompt');
+    // Return portal near spawn (0,0)
+    const d = Math.sqrt(pos.x*pos.x + pos.z*pos.z);
+    if (d < 300) {
+        prompt.innerText = '[ E ] Return to Hub'; prompt.style.display = 'block';
+        if (keys['KeyE']) { keys['KeyE'] = false; exitMoon(); }
+    } else {
+        prompt.style.display = 'none';
+    }
+}
+
 </script>
 </body>
 </html>
