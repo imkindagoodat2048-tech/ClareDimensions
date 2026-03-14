@@ -1645,11 +1645,8 @@ function exitGhostTown() {
     document.getElementById('bsmt-interact').style.display = 'none';
     document.getElementById('c').style.transform = '';
     db.ref('cd_gt_weather').off();
-    db.ref('cd_gt_countdown').off();
-    db.ref('cd_gt_weather_host').off();
     if (gtWeatherInterval) { clearInterval(gtWeatherInterval); gtWeatherInterval = null; }
-    // Release weather host claim
-    db.ref('cd_gt_weather_host').transaction(cur => cur === myId ? null : cur);
+    gtClockData = null;
     clearGTEnemies();
     enterHub();
 }
@@ -1875,6 +1872,7 @@ function generateGhostTown() {
     };
     db.ref('cd_ghosttown').set(saveData);
     db.ref('cd_gt_weather').set('day');
+    gtClockData = generateWeatherClock(Date.now() % 99999);
     gtGenerated = true;
     showGTMsg('🏚️ Ghost Town generated!'); setTimeout(()=>showGTMsg(''), 2500);
 }
@@ -2099,93 +2097,89 @@ function stopShake() {
     document.getElementById('c').style.transform = '';
 }
 
-// ── Weather cycling (host-side: bartelsfamily5 drives the clock) ───────
+// ── Weather cycling — fully serverless, computed from a saved timeline ──
 let gtWeatherInterval = null;
-let gtWeatherHostRef = null;
-let gtWeatherCountdown = 0;       // seconds until next cycle, driven by Firebase
-let gtLastWeather = 'day';        // track previous weather to prevent repeats
+let gtWeatherCountdown = 0;
+let gtClockData = null; // { startTime, cycles: [{weather, duration}] }
 
-function startWeatherCycle() {
-    // Use same host-election pattern as enemies — first player in drives the clock
-    const hostRef = db.ref('cd_gt_weather_host');
-    hostRef.transaction(cur => cur || myId, (err, committed, snap) => {
-        const amHost = snap && snap.val() === myId;
-        if (amHost) {
-            hostRef.onDisconnect().remove();
-            gtWeatherHostRef = hostRef;
-            runWeatherClock();
+// Generate a long pre-planned sequence of cycles and save it to Firebase.
+// Called when the town is generated, or when a player enters and no clock exists.
+function generateWeatherClock(seed) {
+    const rng = seededRand(seed || (Date.now() % 99999));
+    const cycles = [];
+    let lastWeather = 'day';
+    // Pre-generate 200 cycles (~16 hours at 5min each)
+    for (let i = 0; i < 200; i++) {
+        const reckoningChance = 1/15;
+        let next;
+        let attempts = 0;
+        do {
+            if (rng() < reckoningChance) {
+                next = 'reckoning';
+            } else {
+                const safe = ['day','night','rainy'];
+                next = safe[Math.floor(rng() * safe.length)];
+            }
+            attempts++;
+        } while (next === lastWeather && next !== 'rainy' && attempts < 10);
+        lastWeather = next;
+        // Reckoning lasts 60s, everything else WEATHER_CYCLE ms
+        cycles.push({ weather: next, duration: next === 'reckoning' ? 60000 : WEATHER_CYCLE });
+        // After reckoning always insert a day cycle
+        if (next === 'reckoning') {
+            cycles.push({ weather: 'day', duration: WEATHER_CYCLE });
+            lastWeather = 'day';
         }
-    });
-    // If host leaves, new player takes over
-    hostRef.on('value', snap => {
-        if (!snap.val() && myId && currentDim === 'ghosttown') {
-            // Re-try
-            hostRef.transaction(cur => cur || myId, (err, committed, snap2) => {
-                if (snap2 && snap2.val() === myId) {
-                    hostRef.onDisconnect().remove();
-                    runWeatherClock();
-                }
-            });
-        }
-    });
-
-    // All clients listen for the countdown value
-    db.ref('cd_gt_countdown').on('value', snap => {
-        if (snap.exists()) gtWeatherCountdown = snap.val();
-        updateWeatherTimerUI();
-    });
+    }
+    const clockData = { startTime: Date.now(), cycles };
+    db.ref('cd_gt_clock').set(clockData);
+    return clockData;
 }
 
-function runWeatherClock() {
+// Compute current weather and seconds-to-next-cycle from the saved clock
+function computeWeatherFromClock(clock) {
+    if (!clock || !clock.cycles || !clock.startTime) return { weather: 'day', secsLeft: 300 };
+    let t = Date.now() - clock.startTime;
+    // Wrap through the cycle list
+    const totalDur = clock.cycles.reduce((a, c) => a + c.duration, 0);
+    t = ((t % totalDur) + totalDur) % totalDur;
+    let acc = 0;
+    for (const c of clock.cycles) {
+        acc += c.duration;
+        if (t < acc) {
+            const secsLeft = Math.ceil((acc - t) / 1000);
+            return { weather: c.weather, secsLeft };
+        }
+    }
+    return { weather: 'day', secsLeft: 300 };
+}
+
+function startWeatherCycle() {
+    // Read existing clock, or create one if missing
+    db.ref('cd_gt_clock').once('value', snap => {
+        if (snap.exists()) {
+            gtClockData = snap.val();
+        } else {
+            gtClockData = generateWeatherClock();
+        }
+        tickWeather();
+    });
+
+    // Every second, each client locally computes current weather
     if (gtWeatherInterval) clearInterval(gtWeatherInterval);
-    // Initialise countdown
-    gtWeatherCountdown = WEATHER_CYCLE / 1000;
-    db.ref('cd_gt_countdown').set(gtWeatherCountdown);
+    gtWeatherInterval = setInterval(tickWeather, 1000);
+}
 
-    gtWeatherInterval = setInterval(() => {
-        if (currentDim !== 'ghosttown') return;
-
-        // Check we are still host
-        db.ref('cd_gt_weather_host').once('value', snap => {
-            if (!snap.val() || snap.val() !== myId) return;
-
-            gtWeatherCountdown = Math.max(0, gtWeatherCountdown - 1);
-            db.ref('cd_gt_countdown').set(gtWeatherCountdown);
-
-            if (gtWeatherCountdown <= 0) {
-                // Pick next weather — no repeat (except rain can repeat)
-                const reckoningChance = peepingTomActive ? 1/7 : 1/15;
-                let next;
-                let attempts = 0;
-                do {
-                    if (Math.random() < reckoningChance) {
-                        next = 'reckoning';
-                    } else {
-                        const safe = ['day','night','rainy'];
-                        next = safe[Math.floor(Math.random()*safe.length)];
-                    }
-                    attempts++;
-                } while (next === gtLastWeather && next !== 'rainy' && attempts < 10);
-
-                gtLastWeather = next;
-                db.ref('cd_gt_weather').set(next);
-
-                // Reckoning only lasts 60s then snaps back to day
-                if (next === 'reckoning') {
-                    setTimeout(() => {
-                        db.ref('cd_gt_weather').set('day');
-                        gtLastWeather = 'day';
-                        gtWeatherCountdown = WEATHER_CYCLE / 1000;
-                        db.ref('cd_gt_countdown').set(gtWeatherCountdown);
-                    }, 60000);
-                    gtWeatherCountdown = 60; // show reckoning countdown
-                } else {
-                    gtWeatherCountdown = WEATHER_CYCLE / 1000;
-                }
-                db.ref('cd_gt_countdown').set(gtWeatherCountdown);
-            }
-        });
-    }, 1000); // tick every second
+function tickWeather() {
+    if (!gtClockData || currentDim !== 'ghosttown') return;
+    const { weather, secsLeft } = computeWeatherFromClock(gtClockData);
+    // Apply reckoning chance boost if Peeping Tom is active
+    // (already baked into the sequence, but we can re-roll on the fly for active sessions)
+    gtWeatherCountdown = secsLeft;
+    if (weather !== gtWeather) {
+        applyWeather(weather);
+    }
+    updateWeatherTimerUI();
 }
 
 function updateWeatherTimerUI() {
