@@ -1982,26 +1982,23 @@ function placeBuilding(type, bx, bz, rng, rot) {
     grp.position.set(bx, groundY, bz);
     gtScene.add(grp);
 
-    // Register wall collision boxes in world space (axis-aligned, conservative)
-    // Use a padded AABB around the whole building footprint rotated
-    const padding = 20;
+    // Single AABB for the whole building footprint.
+    // Project the four corners of the rotated rectangle into world space,
+    // then take the min/max to get a tight axis-aligned box.
     const cosR = Math.cos(brot), sinR = Math.sin(brot);
-    // Build wall segments as local AABBs then transform to world
-    const wallSegs = [
-        { lx:0, lz:-D/2, hw:W/2+WT, hd:WT/2 },   // back
-        { lx:0, lz: D/2, hw:W/2+WT, hd:WT/2 },   // front
-        { lx:-W/2, lz:0, hw:WT/2, hd:D/2+WT },   // left
-        { lx: W/2, lz:0, hw:WT/2, hd:D/2+WT },   // right
+    const hw = W / 2 + WT, hd = D / 2 + WT; // half-extents with wall thickness
+    const corners = [
+        { lx: -hw, lz: -hd }, { lx:  hw, lz: -hd },
+        { lx:  hw, lz:  hd }, { lx: -hw, lz:  hd },
     ];
-    for (const ws of wallSegs) {
-        // Transform local center to world
-        const wx2 = bx + ws.lx * cosR - ws.lz * sinR;
-        const wz2 = bz + ws.lx * sinR + ws.lz * cosR;
-        // Conservative AABB of rotated box
-        const absHW = Math.abs(ws.hw * cosR) + Math.abs(ws.hd * sinR) + padding;
-        const absHD = Math.abs(ws.hw * sinR) + Math.abs(ws.hd * cosR) + padding;
-        gtCollisionBoxes.push({ minX: wx2 - absHW, maxX: wx2 + absHW, minZ: wz2 - absHD, maxZ: wz2 + absHD });
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const c of corners) {
+        const wx2 = bx + c.lx * cosR - c.lz * sinR;
+        const wz2 = bz + c.lx * sinR + c.lz * cosR;
+        if (wx2 < minX) minX = wx2; if (wx2 > maxX) maxX = wx2;
+        if (wz2 < minZ) minZ = wz2; if (wz2 > maxZ) maxZ = wz2;
     }
+    gtCollisionBoxes.push({ minX, maxX, minZ, maxZ });
 
     const bldg = { type, x:bx, z:bz, rot:brot, mesh:grp, sz, interior:null };
     gtBuildings.push(bldg);
