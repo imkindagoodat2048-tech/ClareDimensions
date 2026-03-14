@@ -2889,14 +2889,17 @@ function generateMoon() {
         const fDist  = 0.22 + rng()*0.12;
         const fcx    = Math.cos(fAngle)*fDist + 0.5;
         const fcz    = Math.sin(fAngle)*fDist + 0.5;
-        const numCraters = 4 + Math.floor(rng()*5); // 4-8 per field
+        const numCraters = 4 + Math.floor(rng()*5);
         for (let i = 0; i < numCraters; i++) {
             const spread = 0.06 + rng()*0.06;
             const ca = rng()*Math.PI*2;
             const cd = rng()*spread;
+            const cu2 = fcx + Math.cos(ca)*cd;
+            const cv2 = fcz + Math.sin(ca)*cd;
+            const dBig2 = Math.sqrt((cu2-bigCX)**2+(cv2-bigCZ)**2);
+            if (dBig2 < bigCR*1.4) continue; // skip inside big crater
             craterFields.push({
-                cu: fcx + Math.cos(ca)*cd,
-                cv: fcz + Math.sin(ca)*cd,
+                cu: cu2, cv: cv2,
                 r:  0.015 + rng()*0.025,
                 depth: -(50 + rng()*140),
                 rimH:   25 + rng()*55,
@@ -2904,14 +2907,28 @@ function generateMoon() {
         }
     }
 
-    // ── Scatter lots of random lone craters everywhere ──────────────
+    // ── 50 scattered craters (avoid big crater zone) ─────────────────
     const loneCraters = [];
-    for (let i = 0; i < 20 + Math.floor(rng()*15); i++) {
+    let lcAttempts = 0;
+    while (loneCraters.length < 50 && lcAttempts++ < 400) {
+        const cu = 0.03 + rng()*0.94, cv = 0.03 + rng()*0.94;
+        const dBig = Math.sqrt((cu-bigCX)**2+(cv-bigCZ)**2);
+        if (dBig < bigCR*1.4) continue;
         loneCraters.push({
-            cu: 0.03 + rng()*0.94, cv: 0.03 + rng()*0.94,
-            r:  0.006 + rng()*0.022,
-            depth: -(25 + rng()*110),
-            rimH:  12 + rng()*50,
+            cu, cv,
+            r:     0.004 + rng()*0.018,
+            depth: -(20 + rng()*100),
+            rimH:  10 + rng()*45,
+        });
+    }
+
+    // ── 30 random hills scattered everywhere ─────────────────────────
+    const randHills = [];
+    for (let i = 0; i < 30; i++) {
+        randHills.push({
+            hu: 0.03 + rng()*0.94, hv: 0.03 + rng()*0.94,
+            r:  0.015 + rng()*0.04,
+            height: 60 + rng()*220,
         });
     }
     const allSmallCraters = [...craterFields, ...loneCraters];
@@ -2983,6 +3000,17 @@ function generateMoon() {
                         const tr = (t-0.65)/0.7; const tts = Math.max(0, 1-tr*tr);
                         h += sc.rimH*tts;
                     }
+                }
+            }
+
+            // Random hills
+            for (const rh of randHills) {
+                const hdu = u-rh.hu, hdv = v-rh.hv;
+                const hdist = Math.sqrt(hdu*hdu+hdv*hdv);
+                if (hdist < rh.r) {
+                    const t = 1 - hdist/rh.r;
+                    const ts = t*t*(3-2*t);
+                    h += rh.height * ts;
                 }
             }
 
