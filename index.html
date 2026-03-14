@@ -2592,7 +2592,7 @@ function updateGhostTown(dt) {
             }
             // Deal big damage
             if (pdist < 120 && now - e.lastHit > 2500) {
-                e.lastHit = now; dealGTDmg(75); showGTMsg('🕷️ The Mega Spider got you!'); setTimeout(()=>showGTMsg(''),2500);
+                e.lastHit = now; dealGTDmg(75); showGTMsg('💀 The Mega Spider got you!'); setTimeout(()=>showGTMsg(''),2500);
             }
             // Occasionally spawn a hostile spider (max every 8s, despawn after 15s)
             if (!e.spawnCooldown) e.spawnCooldown = 0;
@@ -2847,102 +2847,134 @@ function generateMoon() {
     const segs = MOON_TERRAIN_SEGS;
     const heights = [];
 
-    // Biome zones
-    // 1. Martian Colony — centre, flat
-    // 2. Big Crater — guaranteed, placed off-centre
-    // 3. Mimic Grounds — one large mountain, placed far from centre
-    // 4. Crater Field — 5-10 small craters scattered elsewhere
+    // ── Guaranteed biome layout using 4 quadrant slots ────────────
+    // Map is divided into 4 diagonal quadrants from centre.
+    // Each biome gets one quadrant so none can be missing.
+    // Quadrant angles (NE, SE, SW, NW) shuffled per generation.
+    const quadAngles = [Math.PI*0.25, Math.PI*0.75, Math.PI*1.25, Math.PI*1.75];
+    // Shuffle quadrants
+    for (let i = quadAngles.length-1; i > 0; i--) {
+        const j = Math.floor(rng()*(i+1));
+        [quadAngles[i], quadAngles[j]] = [quadAngles[j], quadAngles[i]];
+    }
+    // Assign: [0]=BigCrater, [1]=MimicGrounds, [2]=CraterField1, [3]=CraterField2
+    // Colony is always centre, no quadrant needed.
 
-    // Big Crater centre (off-centre)
-    const bigCraterAngle = rng()*Math.PI*2;
-    const bigCraterDist  = 0.18 + rng()*0.08; // normalised 0-1 from map centre
+    // ── Big Crater — guaranteed in quadrant 0 ─────────────────────
+    const bigCraterAngle = quadAngles[0] + (rng()-0.5)*0.4;
+    const bigCraterDist  = 0.20 + rng()*0.08;
     const bigCX = Math.cos(bigCraterAngle)*bigCraterDist + 0.5;
     const bigCZ = Math.sin(bigCraterAngle)*bigCraterDist + 0.5;
-    const bigCR = 0.12 + rng()*0.06; // radius in normalised space
-    const bigCDepth = -(400 + rng()*200);
-    const bigCRimH  = 120 + rng()*80;
+    const bigCR    = 0.10 + rng()*0.05;
+    const bigCDepth = -(450 + rng()*250);
+    const bigCRimH  = 140 + rng()*100;
 
-    // Mimic Mountain — far side
-    const mimicAngle = bigCraterAngle + Math.PI + (rng()-0.5)*0.5;
-    const mimicDist  = 0.35 + rng()*0.08;
+    // ── Mimic Mountain — guaranteed in quadrant 1 ─────────────────
+    const mimicAngle = quadAngles[1] + (rng()-0.5)*0.3;
+    const mimicDist  = 0.30 + rng()*0.10;
     const mimicU = Math.cos(mimicAngle)*mimicDist + 0.5;
     const mimicV = Math.sin(mimicAngle)*mimicDist + 0.5;
-    const mimicMtnR = 0.05 + rng()*0.03;
-    const mimicMtnH = 1200 + rng()*600;
-    // Store world-space mimic mountain peak
+    const mimicMtnR = 0.055 + rng()*0.025;
+    const mimicMtnH = 1400 + rng()*700;
     mimicMountainPos = {
         x: (mimicU - 0.5)*MOON_SIZE*2,
         z: (mimicV - 0.5)*MOON_SIZE*2
     };
 
-    // Small craters (crater field)
-    const smallCraters = [];
-    const numSmall = 5 + Math.floor(rng()*6);
-    for (let i = 0; i < numSmall; i++) {
-        smallCraters.push({
-            cu: 0.1 + rng()*0.8, cv: 0.1 + rng()*0.8,
-            r:  0.02 + rng()*0.03,
-            depth: -(60 + rng()*120),
-            rimH:   30 + rng()*40,
-        });
+    // ── Crater Fields — guaranteed clusters in quadrants 2 & 3 ────
+    // Each cluster has a centre point; craters are placed near it.
+    const craterFields = [];
+    for (let f = 0; f < 2; f++) {
+        const fAngle = quadAngles[2+f] + (rng()-0.5)*0.3;
+        const fDist  = 0.22 + rng()*0.12;
+        const fcx    = Math.cos(fAngle)*fDist + 0.5;
+        const fcz    = Math.sin(fAngle)*fDist + 0.5;
+        const numCraters = 4 + Math.floor(rng()*5); // 4-8 per field
+        for (let i = 0; i < numCraters; i++) {
+            const spread = 0.06 + rng()*0.06;
+            const ca = rng()*Math.PI*2;
+            const cd = rng()*spread;
+            craterFields.push({
+                cu: fcx + Math.cos(ca)*cd,
+                cv: fcz + Math.sin(ca)*cd,
+                r:  0.015 + rng()*0.025,
+                depth: -(50 + rng()*140),
+                rimH:   25 + rng()*55,
+            });
+        }
     }
 
+    // ── Also scatter a few random lone craters anywhere ───────────
+    const loneCraters = [];
+    for (let i = 0; i < 4 + Math.floor(rng()*4); i++) {
+        loneCraters.push({
+            cu: 0.05 + rng()*0.9, cv: 0.05 + rng()*0.9,
+            r:  0.008 + rng()*0.014,
+            depth: -(30 + rng()*70),
+            rimH:  15 + rng()*30,
+        });
+    }
+    const allSmallCraters = [...craterFields, ...loneCraters];
+
+    // ── Build heightmap ───────────────────────────────────────────
     for (let vi = 0; vi <= segs; vi++) {
         heights.push([]);
         for (let ui = 0; ui <= segs; ui++) {
             const u = ui/segs, v = vi/segs;
             const wx = (u-0.5)*MOON_SIZE*2, wz = (v-0.5)*MOON_SIZE*2;
 
-            // Gentle hills base
-            const freq = 1/8000;
-            let h = (Math.sin(wx*freq*1.3+0.7)*Math.cos(wz*freq*0.9+0.3) +
-                     Math.sin(wx*freq*3.1+1.4)*Math.cos(wz*freq*2.7+0.8)) * 40;
+            // Base terrain — multiple frequencies for bumpy imperfect look
+            const f1 = 1/7000, f2 = 1/2500, f3 = 1/900, f4 = 1/300;
+            let h = (Math.sin(wx*f1*1.3+0.7)*Math.cos(wz*f1*0.9+0.3) +
+                     Math.sin(wx*f1*2.4+1.9)*Math.cos(wz*f1*1.8+0.5)) * 90
+                  + (Math.sin(wx*f2*1.1+2.1)*Math.cos(wz*f2*1.4+0.8) +
+                     Math.cos(wx*f2*2.3+0.4)*Math.sin(wz*f2*1.9+1.2)) * 45
+                  + (Math.sin(wx*f3*1.7+1.3)*Math.cos(wz*f3*2.1+0.6)) * 18
+                  + (Math.sin(wx*f4*2.2+0.9)*Math.cos(wz*f4*1.6+2.3)) * 7;
 
-            // Colony centre — flatten
+            // Colony centre — flatten but leave slight imperfection
             const colonyCenterDist = Math.sqrt((u-0.5)**2+(v-0.5)**2);
-            if (colonyCenterDist < 0.08) {
-                h *= Math.max(0, (colonyCenterDist - 0.03)/0.05);
+            if (colonyCenterDist < 0.09) {
+                const blend = Math.max(0, (colonyCenterDist-0.03)/0.06);
+                h *= blend * blend;
             }
 
             // Big crater
             const bdu = u-bigCX, bdv = v-bigCZ;
             const bdist = Math.sqrt(bdu*bdu+bdv*bdv);
-            if (bdist < bigCR*1.3) {
+            if (bdist < bigCR*1.35) {
                 const t = bdist/bigCR;
-                if (t < 0.7) {
-                    // Bowl floor
-                    const tb = t/0.7; const ts = tb*tb*(3-2*tb);
+                if (t < 0.65) {
+                    const tb = t/0.65; const ts = tb*tb*(3-2*tb);
                     h = h*(1-ts) + bigCDepth*ts;
                 } else {
-                    // Rim
-                    const tr = (t-0.7)/0.6; const ts = Math.max(0, 1-tr*tr);
+                    const tr = (t-0.65)/0.7; const ts = Math.max(0, 1-tr*tr);
                     h += bigCRimH*ts;
                 }
             }
 
-            // Mimic mountain
+            // Mimic mountain — jagged peak
             const mdu = u-mimicU, mdv = v-mimicV;
             const mdist = Math.sqrt(mdu*mdu+mdv*mdv);
-            if (mdist < mimicMtnR*1.5) {
-                const t = 1 - mdist/mimicMtnR;
-                if (t > 0) {
-                    const ts = Math.max(0,t)*Math.max(0,t)*(3-2*Math.max(0,t));
-                    const ridge = Math.sin(wx*freq*6+2.1)*Math.cos(wz*freq*5+1.3)*120;
-                    h = h*(1-ts) + (mimicMtnH+ridge)*ts;
-                }
+            if (mdist < mimicMtnR*1.6) {
+                const t = Math.max(0, 1 - mdist/mimicMtnR);
+                const ts = t*t*(3-2*t);
+                const jagged = Math.sin(wx*f2*4.1+2.1)*Math.cos(wz*f2*3.7+1.3)*180
+                             + Math.sin(wx*f3*5.3+0.7)*Math.cos(wz*f3*4.9+1.8)*60;
+                h = h*(1-ts) + (mimicMtnH + jagged)*ts;
             }
 
-            // Small craters
-            for (const sc of smallCraters) {
+            // Crater fields + lone craters
+            for (const sc of allSmallCraters) {
                 const sdu = u-sc.cu, sdv = v-sc.cv;
                 const sdist = Math.sqrt(sdu*sdu+sdv*sdv);
-                if (sdist < sc.r*1.3) {
+                if (sdist < sc.r*1.35) {
                     const t = sdist/sc.r;
-                    if (t < 0.7) {
-                        const tb = t/0.7; const ts = tb*tb*(3-2*tb);
+                    if (t < 0.65) {
+                        const tb = t/0.65; const ts = tb*tb*(3-2*tb);
                         h = h*(1-ts) + sc.depth*ts;
                     } else {
-                        const tr = (t-0.7)/0.6; const tts = Math.max(0,1-tr*tr);
+                        const tr = (t-0.65)/0.7; const tts = Math.max(0, 1-tr*tr);
                         h += sc.rimH*tts;
                     }
                 }
@@ -2954,11 +2986,8 @@ function generateMoon() {
 
     moonTerrainHeights = heights;
     applyMoonHeights(heights);
-
-    // Roads in colony
     buildMoonRoads();
 
-    // Save
     const flat = heights.map(row => row.map(v2 => Math.round(v2*10)/10));
     db.ref('cd_moon').set({
         heights: flat, segs,
@@ -3175,7 +3204,7 @@ function updateMimic(e, dt, pdx, pdz, pdist, now) {
         }
         if (pdist < 80 && now - e.lastHit > 2000) {
             e.lastHit = now;
-            dealMoonDmg(20, 'RUNRUNRUNRUN');
+            dealMoonDmg(20, '😈 The Mimic (disguised) hit you!');
         }
     }
 }
