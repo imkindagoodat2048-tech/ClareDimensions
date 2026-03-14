@@ -1124,7 +1124,7 @@ wrap.addEventListener('click', () => {
 
     } else if (enemy.type === 'mountainbuddy') {
         if (enemy.tamed) {
-            showPetNotif('💙 Your Mountain Buddy hugs you!');
+            showPetNotif('💙 Your Mountain Buddy nuzzles you!');
             return;
         }
         // 1/10 chance to tame
@@ -2927,8 +2927,8 @@ function generateMoon() {
     for (let i = 0; i < 30; i++) {
         randHills.push({
             hu: 0.03 + rng()*0.94, hv: 0.03 + rng()*0.94,
-            r:  0.015 + rng()*0.04,
-            height: 60 + rng()*220,
+            r:  0.06 + rng()*0.12,   // large radius in UV space (covers big area)
+            height: 150 + rng()*400, // tall enough to clearly see
         });
     }
     const allSmallCraters = [...craterFields, ...loneCraters];
