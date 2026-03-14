@@ -952,24 +952,51 @@ const ENEMY_DEFS = {
     mountainbuddy: { img: 'enemies/mountainbuddy.png', hostile: true,  speed: 320,  size: 90,  y: 0,   minY: 120 },
 };
 
-// Texture cache
+// Texture cache — tries local path first, falls back to a colored canvas
+const GITHUB_BASE = 'https://raw.githubusercontent.com/bartelsfamily5/claredimensions/main/enemies/';
 const _spriteTexCache = {};
+
 function getSpriteTexture(type, def, cb) {
     if (_spriteTexCache[type]) { cb(_spriteTexCache[type]); return; }
-    const tex = new THREE.TextureLoader().load(
-        def.img,
+
+    function makeFallback() {
+        const c = document.createElement('canvas'); c.width = 128; c.height = 128;
+        const ctx = c.getContext('2d');
+        const colors = {
+            buddy:'#f39c12', fly:'#7f8c8d', mountainbuddy:'#c0392b',
+            statue:'#7f8c8d', falseBuddy:'#8e44ad', spider:'#2c3e50',
+            lightguide:'#3498db', default:'#888'
+        };
+        ctx.fillStyle = colors[type] || colors.default;
+        ctx.fillRect(0,0,128,128);
+        // Border
+        ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 4;
+        ctx.strokeRect(2,2,124,124);
+        // Label
+        ctx.fillStyle = 'white'; ctx.font = 'bold 18px monospace';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(type.toUpperCase().slice(0,8), 64, 64);
+        const t2 = new THREE.CanvasTexture(c);
+        _spriteTexCache[type] = t2; cb(t2);
+    }
+
+    // Try local path (works if served), then GitHub raw, then fallback
+    const localPath = def.img;
+    const githubPath = GITHUB_BASE + def.img.split('/').pop();
+
+    const loader = new THREE.TextureLoader();
+    loader.load(
+        localPath,
         t => { _spriteTexCache[type] = t; cb(t); },
         undefined,
         () => {
-            // Fallback: draw a coloured square on a canvas
-            const c = document.createElement('canvas'); c.width = c.height = 64;
-            const ctx = c.getContext('2d');
-            ctx.fillStyle = type==='buddy'?'#f39c12':type==='fly'?'#95a5a6':'#c0392b';
-            ctx.fillRect(0,0,64,64);
-            ctx.fillStyle='white'; ctx.font='36px serif'; ctx.textAlign='center';
-            ctx.fillText(type==='buddy'?'😊':type==='fly'?'🪰':'😠', 32, 44);
-            const t2 = new THREE.CanvasTexture(c);
-            _spriteTexCache[type] = t2; cb(t2);
+            // Local failed — try GitHub raw
+            loader.load(
+                githubPath,
+                t => { _spriteTexCache[type] = t; cb(t); },
+                undefined,
+                () => makeFallback()
+            );
         }
     );
 }
@@ -1262,8 +1289,9 @@ function update(dt) {
         if (hr < HUB_R - 10) { pos.x = newX; pos.z = newZ; }
         pos.y = 0;
     } else if (currentDim === 'basement') {
-        // Basement — free movement, wall collision handled per-room
+        // Basement — resolve wall collision before applying movement
         pos.x = newX; pos.z = newZ; pos.y = 0;
+        resolveBasementCollision();
     } else {
         // Grasslands — clamp to terrain bounds
         newX = Math.max(-G_SIZE + 50, Math.min(G_SIZE - 50, newX));
@@ -1441,8 +1469,9 @@ function enterBasement() {
     activeScene  = bsmtScene;
     activeCamera = bsmtCamera;
 
-    pos.x = 0; pos.y = 0; pos.z = 0;
-    bsmtCamera.position.set(0, EYE_H * 0.6, 0);
+    pos.x = 0; pos.y = 0; pos.z = ROOM_W * 0.65; // south edge, facing north
+    yaw = Math.PI; // facing into the room (north)
+    bsmtCamera.position.set(pos.x, EYE_H * 0.6, pos.z);
 
     // Load rooms from Firebase
     db.ref('cd_basement_rooms').once('value', snap => {
@@ -1495,6 +1524,8 @@ function buildBsmtScene() {
     bsmtCamera = makeCamera();
     bsmtCamera.fov = 70;
     bsmtCamera.updateProjectionMatrix();
+    // Dim ambient so walls are visible even before entering a lit room
+    bsmtScene.add(new THREE.AmbientLight(0x332211, 0.4));
 }
 
 // ── Room definition ─────────────────────────────────────────────────
@@ -1515,19 +1546,19 @@ const MAT_CEIL   = new THREE.MeshLambertMaterial({ color: 0x1a1008 });
 const MAT_DOOR   = new THREE.MeshLambertMaterial({ color: 0x0a0a0a, transparent:true, opacity:0 }); // invisible gap
 
 const WALL_MATS = {
-    plain:         () => new THREE.MeshLambertMaterial({ color: 0x4a2e1a }),
-    meeting:       () => new THREE.MeshLambertMaterial({ color: 0x3a2010 }),
-    darkplace:     () => new THREE.MeshLambertMaterial({ color: 0x0a0805 }),
-    generator:     () => new THREE.MeshLambertMaterial({ color: 0x2a2010 }),
-    carousel:      () => new THREE.MeshLambertMaterial({ color: 0x8a3060, emissive:0x3a1030, emissiveIntensity:0.2 }),
-    starting:      () => new THREE.MeshLambertMaterial({ color: 0x4a2e1a }),
-    falsemeeting:  () => new THREE.MeshLambertMaterial({ color: 0x2a0a0a }),
-    checkerboard:  () => null, // special
-    toilet:        () => new THREE.MeshLambertMaterial({ color: 0x4a3a2a }),
-    buddyspace:    () => new THREE.MeshLambertMaterial({ color: 0x1a4a2a }),
-    playroom:      () => new THREE.MeshLambertMaterial({ color: 0x6a2a5a }),
-    void:          () => new THREE.MeshLambertMaterial({ color: 0xffffff }),
-    hostile:       () => new THREE.MeshLambertMaterial({ color: 0x3a1010 }),
+    plain:         () => new THREE.MeshLambertMaterial({ color: 0x8b5a2b }),
+    meeting:       () => new THREE.MeshLambertMaterial({ color: 0x7a4520 }),
+    darkplace:     () => new THREE.MeshLambertMaterial({ color: 0x1a1008 }),
+    generator:     () => new THREE.MeshLambertMaterial({ color: 0x6a5530 }),
+    carousel:      () => new THREE.MeshLambertMaterial({ color: 0xcc5090, emissive:0x661848, emissiveIntensity:0.3 }),
+    starting:      () => new THREE.MeshLambertMaterial({ color: 0x8b5a2b }),
+    falsemeeting:  () => new THREE.MeshLambertMaterial({ color: 0x5a1010 }),
+    checkerboard:  () => null,
+    toilet:        () => new THREE.MeshLambertMaterial({ color: 0x7a6040 }),
+    buddyspace:    () => new THREE.MeshLambertMaterial({ color: 0x2a7a3a }),
+    playroom:      () => new THREE.MeshLambertMaterial({ color: 0xaa4488 }),
+    void:          () => new THREE.MeshBasicMaterial ({ color: 0xffffff }),
+    hostile:       () => new THREE.MeshLambertMaterial({ color: 0x7a2020 }),
 };
 
 function buildRoomMesh(key, room) {
@@ -1631,22 +1662,26 @@ function buildRoomMesh(key, room) {
 }
 
 function addLightbulb(grp, x, y, z, roomType) {
-    // Cord
     const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.5,15,4), new THREE.MeshBasicMaterial({color:0x222}));
     cord.position.set(x, y+7, z); grp.add(cord);
-    // Bulb
     const bulb = new THREE.Mesh(new THREE.SphereGeometry(6,8,8), new THREE.MeshBasicMaterial({color:0xffffaa}));
     bulb.position.set(x, y, z);
     bulb.userData.isBulb = true; bulb.userData.roomType = roomType;
     grp.add(bulb);
-    // Light source
-    if (roomType !== 'darkplace') {
+
+    if (roomType === 'darkplace') {
+        // Dark room: light EXISTS but starts at intensity 0, flicker turns it on briefly
+        const pl = new THREE.PointLight(0xffeeaa, 0, ROOM_W * 1.1);
+        pl.position.set(x, y, z);
+        pl.userData.isDarkRoomLight = true;
+        grp.add(pl);
+    } else {
         const pl = new THREE.PointLight(0xffeeaa, 1.8, ROOM_W * 0.9);
         pl.position.set(x, y, z);
         pl.userData.isRoomLight = true;
         grp.add(pl);
     }
-    // Generator room — permanent yellow glow regardless of power
+
     if (roomType === 'generator') {
         const gl = new THREE.PointLight(0xffcc00, 2.5, ROOM_W * 1.2);
         gl.position.set(x, y-20, z);
@@ -1843,7 +1878,7 @@ function addObjects(grp, room, RW, RH, RD, rng2) {
     const neighbors = getNeighborTypes(room.gx, room.gz);
     const nearDark = neighbors.includes('darkplace');
 
-    const count = 2 + Math.floor(rng2() * 3);
+    const count = 1 + Math.floor(rng2() * 2);
     for (let i=0; i<count; i++) {
         const ot = OBJECT_TYPES[Math.floor(rng2()*OBJECT_TYPES.length)];
         const ox = (rng2()-0.5)*RW*0.5, oz = (rng2()-0.5)*RD*0.5;
@@ -1913,24 +1948,29 @@ function generateBasement() {
     while(queue.length) {
         const {gx,gz} = queue.shift();
         const DIRS_GRID = [{dx:0,dz:-1,door:'N',opp:'S'},{dx:0,dz:1,door:'S',opp:'N'},{dx:1,dz:0,door:'E',opp:'W'},{dx:-1,dz:0,door:'W',opp:'E'}];
-        // Each room gets 1-4 doors, no two same types adjacent
+        const currentRoom = bsmtRooms[`${gx},${gz}`];
+        const isStarting  = currentRoom.type === 'starting';
+
+        // Starting room: expand in all 4 dirs. All other rooms: only expand from their OWN door count.
+        // Each non-starting room already has its entry door set. Give it 0-1 EXIT doors so hallways stay linear.
         const shuffled = DIRS_GRID.sort(()=>Math.random()-0.5);
-        const doorCount = bsmtRooms[`${gx},${gz}`].type==='starting'?4:1+Math.floor(Math.random()*3);
-        let added=0;
+        const exitDoors = isStarting ? 4 : (Math.random() < 0.55 ? 1 : 0); // 55% chance of 1 exit, rest are dead ends
+        let added = 0;
+
         for (const d of shuffled) {
-            if (added >= doorCount) break;
+            if (added >= exitDoors) break;
+            // Don't put a door where one already exists (the entry)
+            if (currentRoom.doors[d.door]) continue;
             const nk = `${gx+d.dx},${gz+d.dz}`;
             if (visited.has(nk)) continue;
-            // Don't let two same types touch (except plain)
             const neighborTypes = getNeighborTypesFromGrid(gx+d.dx, gz+d.dz);
-            let rtype = pickRoomType(neighborTypes);
+            const rtype = pickRoomType(neighborTypes);
             visited.add(nk);
             const nr = makeRoom(rtype, gx+d.dx, gz+d.dz);
             bsmtRooms[nk] = nr;
-            // Connect doors
-            bsmtRooms[`${gx},${gz}`].doors[d.door] = true;
+            currentRoom.doors[d.door] = true;
             nr.doors[d.opp] = true;
-            if (visited.size < 40) queue.push({gx:gx+d.dx,gz:gz+d.dz});
+            if (visited.size < 50) queue.push({gx:gx+d.dx,gz:gz+d.dz});
             added++;
         }
     }
@@ -2279,24 +2319,42 @@ function spawnFalseBuddy(wx, wz) {
 
 // ── Dark Room flicker ──────────────────────────────────────────────────
 let flickerTimeout = null;
+let darkRoomLightOn = false; // tracks current state for statue movement
+
+function getDarkRoomLight() {
+    // Find the PointLight for the current dark room
+    const gx = Math.round(pos.x / ROOM_W), gz = Math.round(pos.z / ROOM_W);
+    const grp = bsmtMeshes[`${gx},${gz}`];
+    if (!grp) return null;
+    let found = null;
+    grp.traverse(obj => { if (obj.isLight && obj.userData.isDarkRoomLight) found = obj; });
+    return found;
+}
+
 function startDarkRoomFlicker() {
-    const fEl = document.getElementById('bsmt-flicker');
+    darkRoomLightOn = false;
     function flick() {
-        fEl.style.display='block'; fEl.style.opacity='0';
-        // Flash on
-        fEl.style.transition='none'; fEl.style.opacity='0';
-        setTimeout(()=>{ fEl.style.opacity='1';
-            setTimeout(()=>{ fEl.style.opacity='0';
-                flickerTimeout=setTimeout(flick, 2000+Math.random()*1000);
-            }, 500);
-        }, 50);
+        const light = getDarkRoomLight();
+        // Turn light ON for 0.5s
+        darkRoomLightOn = true;
+        if (light) light.intensity = 2.2;
+        flickerTimeout = setTimeout(() => {
+            // Turn light OFF
+            darkRoomLightOn = false;
+            if (light) light.intensity = 0;
+            // Wait 2-3s before next flicker
+            flickerTimeout = setTimeout(flick, 2000 + Math.random() * 1000);
+        }, 500);
     }
     flick();
 }
+
 function stopDarkRoomFlicker() {
     clearTimeout(flickerTimeout);
-    const fEl=document.getElementById('bsmt-flicker');
-    fEl.style.opacity='0'; fEl.style.display='none';
+    darkRoomLightOn = false;
+    // Make sure light is off when leaving
+    const light = getDarkRoomLight();
+    if (light) light.intensity = 0;
 }
 
 // ── Carousel effect ────────────────────────────────────────────────────
@@ -2362,8 +2420,8 @@ function updateBasement(dt) {
         const pdist=Math.sqrt(pdx*pdx+pdz*pdz);
 
         if(e.type==='statue') {
-            // Only moves when lights are on AND player is NOT looking at it
-            if(lightsOn && !isLookingAt(e)) {
+            // Only moves when the dark room light is ON AND player is NOT looking at it
+            if(darkRoomLightOn && !isLookingAt(e)) {
                 e.x+=pdx/(pdist||1)*e.def.speed*dt;
                 e.z+=pdz/(pdist||1)*e.def.speed*dt;
             }
@@ -2428,6 +2486,61 @@ function showBsmtMsg(msg) {
     const el=document.getElementById('bsmt-msg');
     el.innerText=msg;
     el.style.display=msg?'block':'none';
+}
+
+// ── Basement wall collision ───────────────────────────────────────────
+const PLAYER_R = 18;
+
+function resolveBasementCollision() {
+    const gx = Math.round(pos.x / ROOM_W);
+    const gz = Math.round(pos.z / ROOM_W);
+
+    // Check current room and immediate neighbors so doorway transitions work
+    for (let ox = -1; ox <= 1; ox++) {
+        for (let oz = -1; oz <= 1; oz++) {
+            const rk   = `${gx+ox},${gz+oz}`;
+            const room = bsmtRooms[rk];
+            if (!room) continue;
+
+            const isBig = room.type === 'starting' || room.type === 'darkplace';
+            const half  = ROOM_W * (isBig ? 1.5 : 1.0) / 2 - WALL_T / 2;
+            const rx    = room.gx * ROOM_W;
+            const rz2   = room.gz * ROOM_W;
+
+            // Player local coords relative to this room's centre
+            const lx = pos.x - rx;
+            const lz = pos.z - rz2;
+
+            // Skip if player is far from this room
+            if (Math.abs(lx) > half + PLAYER_R * 4 || Math.abs(lz) > half + PLAYER_R * 4) continue;
+
+            // Four walls: North (lz < -half), South (lz > half), East (lx > half), West (lx < -half)
+            const walls = [
+                { perpAxis:'z', perpLocal: lz,  wallFace: -half, side: -1, door: 'N', paraLocal: lx },
+                { perpAxis:'z', perpLocal: lz,  wallFace:  half, side:  1, door: 'S', paraLocal: lx },
+                { perpAxis:'x', perpLocal: lx,  wallFace:  half, side:  1, door: 'E', paraLocal: lz },
+                { perpAxis:'x', perpLocal: lx,  wallFace: -half, side: -1, door: 'W', paraLocal: lz },
+            ];
+
+            walls.forEach(w => {
+                // Has player crossed this wall face?
+                const crossed = w.side > 0
+                    ? (w.perpLocal + PLAYER_R > w.wallFace)
+                    : (w.perpLocal - PLAYER_R < w.wallFace);
+                if (!crossed) return;
+
+                // Is there a door gap and is the player aligned with it?
+                if (room.doors[w.door] && Math.abs(w.paraLocal) < DOOR_W / 2 - PLAYER_R) return;
+
+                // Push player back to just inside the wall
+                if (w.perpAxis === 'z') {
+                    pos.z = rz2 + w.wallFace - w.side * PLAYER_R;
+                } else {
+                    pos.x = rx  + w.wallFace - w.side * PLAYER_R;
+                }
+            });
+        }
+    }
 }
 
 function loop() {
