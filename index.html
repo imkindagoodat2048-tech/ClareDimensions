@@ -235,7 +235,6 @@
 
 <!-- Basement screen effects -->
 <div id="bsmt-flicker" style="position:fixed;inset:0;background:#000;pointer-events:none;z-index:800;display:none;opacity:0;"></div>
-<div id="bsmt-rotate-wrap" style="position:fixed;inset:0;pointer-events:none;z-index:5;display:none;"></div>
 <div id="bsmt-msg" style="
     position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
     font-size:18px;color:white;pointer-events:none;z-index:900;
@@ -491,7 +490,7 @@ function makeSquareMesh(hexColor) {
 let hubScene, hubCamera;
 const PORTALS = [
     { id: 'grasslands', label: '🌿 Grasslands',       color: 0x2ed573, angle: 0,           locked: false },
-    { id: 'basement',   label: '🔦 Abandoned Basement',color: 0xaa6600, angle: Math.PI*2/3, locked: false },
+    { id: 'ghosttown',  label: '🏚️ Ghost Town',        color: 0xd4a96a, angle: Math.PI*2/3, locked: false },
     { id: 'dim3',       label: '🔒 ???',               color: 0x555566, angle: Math.PI*4/3, locked: true  },
 ];
 const PORTAL_DIST = 220;
@@ -1241,7 +1240,7 @@ function checkPortals() {
                 if (keys['KeyE']) {
                     keys['KeyE'] = false;
                     if (nearest.data.id === 'grasslands') enterGrasslands();
-                    else if (nearest.data.id === 'basement') enterBasement();
+                    else if (nearest.data.id === 'ghosttown') enterGhostTown();
                 }
             }
         } else {
@@ -1259,8 +1258,8 @@ function checkPortals() {
         } else {
             prompt.style.display = 'none';
         }
-    } else if (currentDim === 'basement') {
-        checkBasementDoors();
+    } else if (currentDim === 'ghosttown') {
+        checkGTDoors();
     }
 }
 
@@ -1288,10 +1287,11 @@ function update(dt) {
         const hr = Math.sqrt(newX*newX + newZ*newZ);
         if (hr < HUB_R - 10) { pos.x = newX; pos.z = newZ; }
         pos.y = 0;
-    } else if (currentDim === 'basement') {
-        // Basement — resolve wall collision before applying movement
+    } else if (currentDim === 'ghosttown') {
+        const spd = (gtSlowTimer > 0 && Date.now()-gtSlowTimer < 60000) ? GT_SPEED * 0.4 : GT_SPEED;
         pos.x = newX; pos.z = newZ; pos.y = 0;
-        resolveBasementCollision();
+        pos.x = Math.max(-GT_SIZE+50, Math.min(GT_SIZE-50, pos.x));
+        pos.z = Math.max(-GT_SIZE+50, Math.min(GT_SIZE-50, pos.z));
     } else {
         // Grasslands — clamp to terrain bounds
         newX = Math.max(-G_SIZE + 50, Math.min(G_SIZE - 50, newX));
@@ -1342,7 +1342,10 @@ function update(dt) {
 
     updateNameTags();
     updateEnemies(dt);
-    if (currentDim === 'basement') updateBasement(dt);
+    if (currentDim === 'ghosttown') updateGhostTown(dt);
+    else if (currentDim === 'ghosttown' && gtInInterior) {
+        activeScene = gtInteriorScene; activeCamera = gtInteriorCamera;
+    }
 
     // Animate hub portal glow
     if (currentDim === 'hub' && hubPortalMeshes) {
@@ -1393,16 +1396,794 @@ function updateNameTags() {
 
 
 // ════════════════════════════════════════════════════════════════════
-// DIMENSION 2 — ABANDONED BASEMENT
+// DIMENSION 2 — GHOST TOWN
 // ════════════════════════════════════════════════════════════════════
 
-// ── Constants ──────────────────────────────────────────────────────
-const ROOM_W  = 400;   // room width/depth (world units)
-const ROOM_H  = 180;   // ceiling height
-const WALL_T  = 12;    // wall thickness
-const DOOR_W  = 80;    // doorway width
-const DOOR_H  = 130;   // doorway height
-const BSMT_SPEED = 320;
+// ── Constants ────────────────────────────────────────────────────────
+const GT_SIZE        = 6000;   // half-size of full map
+const TOWN_R         = 1200;   // radius of town zone
+const DESERT_R       = 3000;   // desert zone outer radius
+const MOUNTAIN_R     = 4200;   // mountain zone outer radius
+// Beyond MOUNTAIN_R = Dark Region
+const GT_SPEED       = 420;
+const WEATHER_CYCLE  = 300000; // 5 minutes in ms
+const WEATHERS       = ['day','night','rainy','reckoning'];
+
+// ── State ─────────────────────────────────────────────────────────────
+let gtScene = null, gtCamera = null;
+let gtGenerated  = false;
+let gtWeather    = 'day';
+let gtWeatherTimer = 0;
+let gtBuildings  = [];   // { type, x, z, mesh, interior:null }
+let gtEnemies    = [];
+let gtParticles  = null; // rain
+let gtInteriorScene = null, gtInteriorCamera = null;
+let gtInInterior = false;
+let gtInteriorBuilding = null;
+let gtWet = false, gtWetTimer = 0;
+let gtSlowTimer  = 0;
+let gtReckoningShake = false;
+let gtLastWeatherChange = 0;
+let gtSunLight = null, gtAmbLight = null, gtSkyColor = null;
+let gtStatueLastTick = 0;
+let playerHP_gt = 100;
+let gtDmgTime   = 0;
+let gtMsg        = null; // cached element
+
+const BUILDING_TYPES = ['store','house1','house2','misc1','misc2','misc3','misc4','townhall','museum'];
+
+// ── Enter / Exit ──────────────────────────────────────────────────────
+function enterGhostTown() {
+    currentDim = 'ghosttown';
+    document.getElementById('dim-label').innerText = '🏚️ Ghost Town';
+    document.getElementById('gen-btn').style.display = myName==='bartelsfamily5' ? 'block' : 'none';
+    document.getElementById('gen-btn').innerText = '🏚️ Generate Town';
+    document.getElementById('gen-btn').onclick = generateGhostTown;
+    document.getElementById('hp-bar').style.display = 'block';
+    clearEnemies();
+    gtMsg = document.getElementById('bsmt-msg');
+
+    if (!gtScene) buildGTScene();
+    activeScene  = gtScene;
+    activeCamera = gtCamera;
+    pos.x = 0; pos.y = 0; pos.z = 0;
+    playerHP_gt = 100; updateHPUI();
+    startWeatherCycle();
+
+    // Load from Firebase
+    db.ref('cd_ghosttown').once('value', snap => {
+        if (snap.exists()) applyGTData(snap.val());
+    });
+    // Live weather sync
+    db.ref('cd_gt_weather').on('value', snap => {
+        if (snap.exists()) applyWeather(snap.val());
+    });
+}
+
+function exitGhostTown() {
+    if (gtInInterior) leaveInterior();
+    document.getElementById('hp-bar').style.display = 'none';
+    gtMsg.style.display = 'none';
+    document.getElementById('bsmt-interact').style.display = 'none';
+    document.getElementById('c').style.transform = '';
+    db.ref('cd_gt_weather').off();
+    clearGTEnemies();
+    enterHub();
+}
+
+// ── Scene ─────────────────────────────────────────────────────────────
+function buildGTScene() {
+    gtScene  = new THREE.Scene();
+    gtScene.background = new THREE.Color(0x87ceeb);
+    gtCamera = makeCamera();
+    gtCamera.far = 14000;
+    gtCamera.updateProjectionMatrix();
+
+    gtAmbLight = new THREE.AmbientLight(0xffffff, 0.7);
+    gtScene.add(gtAmbLight);
+    gtSunLight = new THREE.DirectionalLight(0xfff5e0, 1.0);
+    gtSunLight.position.set(800, 1200, 600);
+    gtScene.add(gtSunLight);
+
+    // Ground plane — will be recolored by zone in generateGhostTown
+    const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(GT_SIZE*2, GT_SIZE*2, 120, 120),
+        new THREE.MeshLambertMaterial({ color: 0xd4a96a, vertexColors: false })
+    );
+    ground.rotation.x = -Math.PI/2;
+    ground.userData.isGTGround = true;
+    gtScene.add(ground);
+    gtScene.fog = new THREE.Fog(0x87ceeb, GT_SIZE*0.6, GT_SIZE*1.4);
+}
+
+// ── Generation ────────────────────────────────────────────────────────
+function generateGhostTown() {
+    if (myName !== 'bartelsfamily5') return;
+    const rng = seededRand(Date.now() % 9999);
+
+    // Clear old
+    gtBuildings.forEach(b => { gtScene.remove(b.mesh); });
+    gtBuildings = []; clearGTEnemies();
+
+    // ── Colour ground by zone ──
+    const ground = gtScene.children.find(c => c.userData.isGTGround);
+    if (ground) {
+        const segs = 120;
+        const pos3 = ground.geometry.attributes.position;
+        const colors = [];
+        for (let i = 0; i <= segs; i++) {
+            for (let j = 0; j <= segs; j++) {
+                const idx = i*(segs+1)+j;
+                const wx = pos3.getX(idx), wz = pos3.getY(idx); // PlaneGeometry uses X/Y before rotation
+                const dist = Math.sqrt(wx*wx + wz*wz);
+                let r,g,b;
+                if (dist < TOWN_R) {
+                    // Dirt road beige
+                    r=0.72; g=0.62; b=0.42;
+                } else if (dist < DESERT_R) {
+                    // Sand
+                    r=0.82; g=0.72; b=0.48;
+                } else if (dist < MOUNTAIN_R) {
+                    // Rocky grey
+                    r=0.52; g=0.46; b=0.38;
+                } else {
+                    // Dark region — darker sand
+                    r=0.38; g=0.30; b=0.20;
+                }
+                colors.push(r,g,b);
+            }
+        }
+        ground.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors,3));
+        ground.material.vertexColors = true;
+        ground.geometry.computeVertexNormals();
+    }
+
+    // ── Road down center ──
+    const road = new THREE.Mesh(
+        new THREE.PlaneGeometry(120, TOWN_R*2),
+        new THREE.MeshLambertMaterial({ color: 0x555555 })
+    );
+    road.rotation.x = -Math.PI/2; road.position.y = 1;
+    gtScene.add(road);
+    const road2 = road.clone(); road2.rotation.z = Math.PI/2; gtScene.add(road2);
+
+    // ── Mountains ring ──
+    buildMountainsRing(rng);
+
+    // ── Cacti in desert ──
+    for (let c=0; c<80; c++) {
+        const angle = rng()*Math.PI*2;
+        const r = TOWN_R + 200 + rng()*(MOUNTAIN_R - TOWN_R - 400);
+        const cx = Math.cos(angle)*r, cz = Math.sin(angle)*r;
+        gtScene.add(makeCactus(cx, cz));
+    }
+
+    // ── Town Hall (always 1) ──
+    placeTownHall(rng);
+
+    // ── Museum (always 1) ──
+    placeMuseum(rng);
+
+    // ── Other buildings ──
+    const buildingPool = ['store','house1','house2','misc1','misc2','misc3','misc4'];
+    const numBuildings = 14 + Math.floor(rng()*8);
+    const placed = [];
+    for (let i=0; i<numBuildings; i++) {
+        let attempts = 0, ok = false, bx, bz;
+        while (attempts++ < 30 && !ok) {
+            const angle = rng()*Math.PI*2;
+            const r = 200 + rng()*(TOWN_R - 300);
+            bx = Math.cos(angle)*r; bz = Math.sin(angle)*r;
+            // Don't overlap road or existing buildings
+            if (Math.abs(bx) < 100 || Math.abs(bz) < 100) continue;
+            ok = placed.every(p => Math.sqrt((p.x-bx)**2+(p.z-bz)**2) > 300);
+        }
+        if (!ok) continue;
+        const type = buildingPool[Math.floor(rng()*buildingPool.length)];
+        placeBuilding(type, bx, bz, rng);
+        placed.push({ x:bx, z:bz });
+    }
+
+    // ── Save ──
+    const saveData = {
+        buildings: gtBuildings.map(b=>({ type:b.type, x:+b.x.toFixed(1), z:+b.z.toFixed(1), rot:+(b.rot||0).toFixed(3) })),
+        generated: Date.now()
+    };
+    db.ref('cd_ghosttown').set(saveData);
+    db.ref('cd_gt_weather').set('day');
+    gtGenerated = true;
+    showGTMsg('🏚️ Ghost Town generated!'); setTimeout(()=>showGTMsg(''), 2500);
+}
+
+function applyGTData(data) {
+    if (!data.buildings) return;
+    gtBuildings.forEach(b => gtScene.remove(b.mesh));
+    gtBuildings = [];
+    const rng = seededRand(42);
+    data.buildings.forEach(b => placeBuilding(b.type, b.x, b.z, rng, b.rot));
+    buildMountainsRing(seededRand(7));
+    // Cacti
+    const rng2 = seededRand(13);
+    for (let c=0; c<80; c++) {
+        const angle = rng2()*Math.PI*2;
+        const r = TOWN_R + 200 + rng2()*(MOUNTAIN_R - TOWN_R - 400);
+        gtScene.add(makeCactus(Math.cos(angle)*r, Math.sin(angle)*r));
+    }
+}
+
+// ── Building placement ────────────────────────────────────────────────
+const BLDG_SIZES = {
+    store:    { w:200, d:200, h:160 },
+    house1:   { w:200, d:200, h:150 },
+    house2:   { w:320, d:280, h:160 },
+    misc1:    { w:180, d:180, h:140 },
+    misc2:    { w:180, d:180, h:140 },
+    misc3:    { w:260, d:260, h:150 },
+    misc4:    { w:400, d:400, h:180 },
+    townhall: { w:500, d:400, h:240 },
+    museum:   { w:480, d:380, h:220 },
+};
+
+function placeBuilding(type, bx, bz, rng, rot) {
+    const sz   = BLDG_SIZES[type] || BLDG_SIZES.misc1;
+    const brot = rot !== undefined ? rot : rng()*Math.PI*2;
+    const grp  = new THREE.Group();
+
+    // Walls
+    const wallCol = { store:0xd4b483, house1:0xc8a870, house2:0xc09a60,
+        misc1:0xd0aa7a, misc2:0xcc9966, misc3:0xc89050, misc4:0xd0a868,
+        townhall:0xe8e0cc, museum:0xe0d8c0 }[type] || 0xc8a870;
+    const wallMat = new THREE.MeshLambertMaterial({ color: wallCol });
+    const roofMat = new THREE.MeshLambertMaterial({ color: 0x884422 });
+
+    // Front, back, left, right walls
+    const W=sz.w, D=sz.d, H=sz.h, WT=10;
+    // Back
+    grp.add(mkBox(W,H,WT, wallMat, 0,H/2,-D/2));
+    // Left
+    grp.add(mkBox(WT,H,D, wallMat, -W/2,H/2,0));
+    // Right
+    grp.add(mkBox(WT,H,D, wallMat,  W/2,H/2,0));
+    // Front with door gap
+    const doorW=60, doorH=120;
+    const sw=(W-doorW)/2;
+    grp.add(mkBox(sw,H,WT, wallMat, -W/2+sw/2, H/2, D/2));
+    grp.add(mkBox(sw,H,WT, wallMat,  W/2-sw/2, H/2, D/2));
+    grp.add(mkBox(doorW,H-doorH,WT, wallMat, 0, doorH+(H-doorH)/2, D/2));
+
+    // Door frame
+    const doorMat = new THREE.MeshLambertMaterial({ color: 0x5c3317 });
+    grp.add(mkBox(doorW+8,8,WT+2, doorMat, 0, doorH, D/2));
+    // Door marker (invisible trigger zone)
+    const doorTrigger = new THREE.Mesh(new THREE.BoxGeometry(doorW,doorH,30), new THREE.MeshBasicMaterial({visible:false}));
+    doorTrigger.position.set(0, doorH/2, D/2);
+    doorTrigger.userData.isDoor = true; doorTrigger.userData.buildingIdx = gtBuildings.length;
+    grp.add(doorTrigger);
+
+    // Roof (flat)
+    grp.add(mkBox(W+WT*2, WT, D+WT*2, roofMat, 0, H+WT/2, 0));
+
+    grp.rotation.y = brot;
+    grp.position.set(bx, 0, bz);
+    gtScene.add(grp);
+
+    const bldg = { type, x:bx, z:bz, rot:brot, mesh:grp, sz, interior:null };
+    gtBuildings.push(bldg);
+    return bldg;
+}
+
+function placeTownHall(rng) {
+    placeBuilding('townhall', (rng()-0.5)*200, -(TOWN_R*0.6), rng, 0);
+}
+function placeMuseum(rng) {
+    placeBuilding('museum', (rng()-0.5)*200, TOWN_R*0.55, rng, Math.PI);
+}
+
+function mkBox(w,h,d,mat,x,y,z) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), mat);
+    m.position.set(x,y,z); return m;
+}
+
+// ── Cactus ────────────────────────────────────────────────────────────
+function makeCactus(x,z) {
+    const g = new THREE.Group();
+    const mat = new THREE.MeshLambertMaterial({ color: 0x2d6a2d });
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(6,8,80,6), mat);
+    trunk.position.y = 40; g.add(trunk);
+    const arm1 = new THREE.Mesh(new THREE.CylinderGeometry(4,4,30,6), mat);
+    arm1.rotation.z = Math.PI/3; arm1.position.set(20,50,0); g.add(arm1);
+    const arm2 = new THREE.Mesh(new THREE.CylinderGeometry(4,4,30,6), mat);
+    arm2.rotation.z = -Math.PI/3; arm2.position.set(-20,55,0); g.add(arm2);
+    g.position.set(x, 0, z);
+    g.rotation.y = Math.random()*Math.PI*2;
+    return g;
+}
+
+// ── Mountains ring ────────────────────────────────────────────────────
+function buildMountainsRing(rng) {
+    const mat = new THREE.MeshLambertMaterial({ color: 0x887755 });
+    const count = 48;
+    for (let i=0; i<count; i++) {
+        const angle = (i/count)*Math.PI*2 + (rng()-0.5)*0.15;
+        const r = MOUNTAIN_R - 200 + (rng()-0.5)*300;
+        const cx = Math.cos(angle)*r, cz = Math.sin(angle)*r;
+        const h = 400 + rng()*400;
+        const peak = new THREE.Mesh(new THREE.ConeGeometry(200+rng()*100, h, 7), mat);
+        peak.position.set(cx, h/2, cz);
+        gtScene.add(peak);
+    }
+}
+
+// ── Weather ────────────────────────────────────────────────────────────
+let gtRainParticles = null;
+let gtShakeInterval = null;
+
+function applyWeather(w) {
+    gtWeather = w;
+    document.getElementById('dim-label').innerText = '🏚️ Ghost Town — ' + ({
+        day:'☀️ Day', night:'🌙 Night', rainy:'🌧️ Rain', reckoning:'⚠️ Reckoning'
+    }[w]||w);
+
+    // Sky / lighting
+    const configs = {
+        day:       { sky:0x87ceeb, amb:0.75, sun:1.0,  fog:0x87ceeb },
+        night:     { sky:0x080818, amb:0.12, sun:0.0,  fog:0x080818 },
+        rainy:     { sky:0x445566, amb:0.35, sun:0.2,  fog:0x334455 },
+        reckoning: { sky:0x220a00, amb:0.15, sun:0.05, fog:0x1a0500 },
+    };
+    const cfg = configs[w] || configs.day;
+    if (gtScene)  gtScene.background = new THREE.Color(cfg.sky);
+    if (gtScene)  gtScene.fog = new THREE.Fog(cfg.fog, GT_SIZE*0.4, GT_SIZE*1.1);
+    if (gtAmbLight) gtAmbLight.intensity = cfg.amb;
+    if (gtSunLight) gtSunLight.intensity = cfg.sun;
+
+    // Rain particles
+    if (gtRainParticles) { gtScene.remove(gtRainParticles); gtRainParticles = null; }
+    if (w === 'rainy' || w === 'reckoning') buildRain();
+
+    // Reckoning warning
+    if (w === 'reckoning') {
+        showGTMsg('Something is wrong. Get inside.');
+        setTimeout(() => showGTMsg(''), 4000);
+        startShake();
+    } else {
+        stopShake();
+    }
+
+    // Respawn enemies for new weather
+    clearGTEnemies();
+    if (gtGenerated || Object.keys(gtBuildings).length > 0) spawnGTEnemies();
+}
+
+function buildRain() {
+    const count = 2000;
+    const geo   = new THREE.BufferGeometry();
+    const verts = [];
+    for (let i=0; i<count; i++) {
+        verts.push((Math.random()-0.5)*GT_SIZE*0.6, Math.random()*600, (Math.random()-0.5)*GT_SIZE*0.6);
+    }
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts,3));
+    gtRainParticles = new THREE.Points(geo, new THREE.PointsMaterial({ color:0x88aacc, size:3, transparent:true, opacity:0.5 }));
+    gtScene.add(gtRainParticles);
+}
+
+function startShake() {
+    gtReckoningShake = true;
+}
+function stopShake() {
+    gtReckoningShake = false;
+    document.getElementById('c').style.transform = '';
+}
+
+// ── Weather cycling (host-side: bartelsfamily5 drives the clock) ───────
+let gtWeatherInterval = null;
+function startWeatherCycle() {
+    if (gtWeatherInterval) return;
+    gtWeatherInterval = setInterval(() => {
+        if (myName !== 'bartelsfamily5' || currentDim !== 'ghosttown') return;
+        let next;
+        // 1/15 chance of reckoning
+        if (Math.random() < 1/15) {
+            next = 'reckoning';
+        } else {
+            const safe = ['day','night','rainy'];
+            next = safe[Math.floor(Math.random()*safe.length)];
+        }
+        db.ref('cd_gt_weather').set(next);
+        // Reckoning only lasts 1 minute then goes back to day
+        if (next === 'reckoning') {
+            setTimeout(() => db.ref('cd_gt_weather').set('day'), 60000);
+        }
+    }, WEATHER_CYCLE);
+}
+
+// ── Interiors ─────────────────────────────────────────────────────────
+function enterInterior(bldgIdx) {
+    const b = gtBuildings[bldgIdx];
+    if (!b) return;
+    gtInInterior = true;
+    gtInteriorBuilding = b;
+
+    if (!gtInteriorScene) {
+        gtInteriorScene  = new THREE.Scene();
+        gtInteriorScene.background = new THREE.Color(0x221a10);
+        gtInteriorCamera = makeCamera();
+        gtInteriorCamera.far = 3000;
+        gtInteriorCamera.updateProjectionMatrix();
+        gtInteriorScene.add(new THREE.AmbientLight(0xffeecc, 0.5));
+        const iL = new THREE.PointLight(0xffeeaa, 1.5, 600);
+        iL.position.set(0, 100, 0); gtInteriorScene.add(iL);
+    }
+
+    // Build interior if not cached
+    if (!b.interior) b.interior = buildInterior(b);
+
+    activeScene  = gtInteriorScene;
+    activeCamera = gtInteriorCamera;
+    pos.x = 0; pos.y = 0; pos.z = 0;
+
+    document.getElementById('bsmt-interact').innerText = '[ E ] Exit building';
+    document.getElementById('bsmt-interact').style.display = 'block';
+}
+
+function leaveInterior() {
+    gtInInterior = false;
+    activeScene  = gtScene;
+    activeCamera = gtCamera;
+    document.getElementById('bsmt-interact').style.display = 'none';
+    // Restore HP
+}
+
+function buildInterior(b) {
+    // All interiors are simple room(s) based on building type
+    const s    = gtInteriorScene;
+    const W = b.sz.w*0.9, D = b.sz.d*0.9, H = b.sz.h*0.9, WT=8;
+    const floorMat = new THREE.MeshLambertMaterial({ color:0x5c4020 });
+    const wallMat  = new THREE.MeshLambertMaterial({ color:0x9a7a50 });
+
+    function iBox(w,h,d,mat,x,y,z) { const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat); m.position.set(x,y,z); s.add(m); return m; }
+
+    // Floor, ceiling, 4 walls
+    iBox(W,WT,D, floorMat, 0, 0, 0);
+    iBox(W,WT,D, new THREE.MeshLambertMaterial({color:0x3a2a10}), 0,H,0);
+    iBox(W,H,WT, wallMat, 0,H/2,-D/2);
+    iBox(W,H,WT, wallMat, 0,H/2, D/2);
+    iBox(WT,H,D, wallMat, -W/2,H/2,0);
+    iBox(WT,H,D, wallMat,  W/2,H/2,0);
+
+    // Furniture based on type
+    const tblMat = new THREE.MeshLambertMaterial({color:0x5c3a1e});
+    const chairMat = new THREE.MeshLambertMaterial({color:0x3a2010});
+
+    if (b.type === 'store') {
+        // Shelves along walls
+        for (let i=-1;i<=1;i++) {
+            const shelf=new THREE.Mesh(new THREE.BoxGeometry(W*0.6,8,30), tblMat);
+            shelf.position.set(i*W*0.22, 60+i*20, -D*0.3); s.add(shelf);
+        }
+        iBox(80,4,50, tblMat, 0,40,0); // counter
+    } else if (b.type === 'house1') {
+        // Bed
+        iBox(80,20,100, new THREE.MeshLambertMaterial({color:0x4444aa}), -W/2+60,10,-D/2+70);
+        // Table near entrance
+        iBox(60,4,40, tblMat, W/2-60,35,D/2-60);
+    } else if (b.type === 'house2') {
+        // 4 rooms via internal walls
+        iBox(WT,H,D/2, wallMat, 0,H/2,-D/4); // divider
+        iBox(W/2,H,WT, wallMat, W/4,H/2,0);  // divider
+        // Bed (bedroom)
+        iBox(70,18,90, new THREE.MeshLambertMaterial({color:0x4444aa}), -W/2+50,9,-D/4);
+        // Chair + table (living room)
+        iBox(40,4,40, tblMat, W/4,30,D/4);
+        iBox(30,50,30, new THREE.MeshLambertMaterial({color:0x334455}), W/4,50,D/4);        // TV box on table
+        iBox(40,28,6, new THREE.MeshBasicMaterial({color:0x111111}), W/4,44,D/4);
+        // Bathroom — checkerboard floor tile
+        const cbC = document.createElement('canvas'); cbC.width=cbC.height=64;
+        const cbCtx=cbC.getContext('2d');
+        for(let ci=0;ci<4;ci++) for(let cj=0;cj<4;cj++){cbCtx.fillStyle=(ci+cj)%2===0?'#eee':'#888';cbCtx.fillRect(ci*16,cj*16,16,16);}
+        const cbTex=new THREE.CanvasTexture(cbC); cbTex.wrapS=cbTex.wrapT=THREE.RepeatWrapping; cbTex.repeat.set(4,4);
+        const bathFloor=new THREE.Mesh(new THREE.PlaneGeometry(W/2,D/2),new THREE.MeshLambertMaterial({map:cbTex}));
+        bathFloor.rotation.x=-Math.PI/2; bathFloor.position.set(-W/4,1,D/4); s.add(bathFloor);
+        // Toilet
+        const toiletG=makeGTToilet(); toiletG.position.set(-W/4,0,D/4); s.add(toiletG);
+    } else if (b.type === 'misc2') {
+        iBox(60,4,40, tblMat, 0,40,0);
+        const ch=makeGTChair(chairMat); ch.position.set(0,0,60); s.add(ch);
+    } else if (b.type === 'misc3') {
+        for(let i=0;i<4;i++){
+            const cx=(Math.random()-0.5)*W*0.5, cz=(Math.random()-0.5)*D*0.5;
+            iBox(40,40,40, new THREE.MeshLambertMaterial({color:0x7a6a50}), cx,20,cz);
+        }
+    } else if (b.type === 'misc4') {
+        // Completely empty — just the room
+    } else if (b.type === 'misc1') {
+        // Crate in corner
+        iBox(50,50,50, new THREE.MeshLambertMaterial({color:0x7a6a50}), -W/2+40,25,-D/2+40);
+    } else if (b.type === 'townhall') {
+        // Stage + chairs
+        iBox(W*0.5, 30, D*0.25, new THREE.MeshLambertMaterial({color:0x8a7050}), 0,15,-D*0.3);
+        for(let row=0;row<4;row++) for(let col=0;col<6;col++){
+            const ch=makeGTChair(chairMat);
+            ch.position.set(-W/2+60+col*55, 0, -D*0.1+row*70);
+            s.add(ch);
+            const ch2=makeGTChair(chairMat);
+            ch2.position.set(W/2-60-col*55, 0, -D*0.1+row*70);
+            s.add(ch2);
+        }
+    } else if (b.type === 'museum') {
+        // Paintings on walls — use enemy PNGs
+        const imgs = ['buddy.png','fly.png','mountainbuddy.png','statue.png','notbuddy.png','giantspider.png'];
+        imgs.forEach((img,i) => {
+            const tx = new THREE.TextureLoader();
+            const tryLoad = (path, fallback) => tx.load(path, t=>{
+                const frame=new THREE.Mesh(new THREE.PlaneGeometry(80,80),new THREE.MeshBasicMaterial({map:t,side:THREE.DoubleSide}));
+                frame.position.set(-W/2+40+(i%3)*110, 80, fallback ? D/2-5 : -D/2+5);
+                frame.rotation.y = fallback ? 0 : Math.PI;
+                s.add(frame);
+            }, undefined, fallback ? ()=>{} : ()=>tryLoad(GITHUB_BASE+img, true));
+            tryLoad('enemies/'+img, false);
+        });
+    }
+
+    return true;
+}
+
+function makeGTToilet() {
+    const g=new THREE.Group();
+    g.add(mkBox(30,30,40,new THREE.MeshLambertMaterial({color:0xeeeeee}),0,15,0));
+    g.add(mkBox(32,6,42, new THREE.MeshLambertMaterial({color:0xdddddd}),0,33,0));
+    g.add(mkBox(28,34,14,new THREE.MeshLambertMaterial({color:0xeeeeee}),0,32,-18));
+    return g;
+}
+function makeGTChair(mat) {
+    const g=new THREE.Group();
+    g.add(mkBox(28,4,28,mat,0,28,0));
+    g.add(mkBox(28,36,4,mat,0,48,-12));
+    for(const [lx,lz] of [[-10,-10],[-10,10],[10,-10],[10,10]]) g.add(mkBox(4,28,4,mat,lx,14,lz));
+    return g;
+}
+
+// ── Enemies ────────────────────────────────────────────────────────────
+function clearGTEnemies() {
+    gtEnemies.forEach(e=>{ if(e.sprite) gtScene?.remove(e.sprite); });
+    gtEnemies = [];
+}
+
+const GT_ENEMY_DEFS = {
+    spider:     {img:'enemies/giantspider.png', size:55, speed:GT_SPEED*0.75, dmg:15, hostile:false, tint:null},
+    spiderRed:  {img:'enemies/giantspider.png', size:55, speed:GT_SPEED*0.75, dmg:15, hostile:true,  tint:0xff3333},
+    statue:     {img:'enemies/statue.png',      size:70, speed:GT_SPEED*3,    dmg:30, hostile:true,  tint:null},
+    falseBuddy: {img:'enemies/notbuddy.png',    size:75, speed:GT_SPEED*1.5,  dmg:25, hostile:true,  tint:null},
+};
+
+function spawnGTEnemies() {
+    clearGTEnemies();
+    const w = gtWeather;
+    const rng = seededRand(Date.now()%9999);
+
+    // Spiders — day:non-hostile, night+rain+reckoning:hostile red
+    const spiderType = (w==='day') ? 'spider' : 'spiderRed';
+    const spiderCount = w==='reckoning' ? 12 : w==='day' ? 6 : 8;
+    for (let i=0;i<spiderCount;i++) {
+        const angle=rng()*Math.PI*2, r=200+rng()*TOWN_R*0.8;
+        spawnGTEnemy(spiderType, Math.cos(angle)*r, Math.sin(angle)*r);
+    }
+
+    // Statues
+    if (w==='day') {
+        // Rarely, inside buildings
+        if (rng()<0.3) spawnGTEnemy('statue', (rng()-0.5)*TOWN_R*0.8, (rng()-0.5)*TOWN_R*0.8);
+    } else if (w==='night') {
+        for(let i=0;i<5;i++) spawnGTEnemy('statue',(rng()-0.5)*TOWN_R*1.2,(rng()-0.5)*TOWN_R*1.2);
+    } else if (w==='reckoning') {
+        for(let i=0;i<10;i++) spawnGTEnemy('statue',(rng()-0.5)*TOWN_R*1.5,(rng()-0.5)*TOWN_R*1.5);
+    }
+
+    // False Buddies — night: deep desert, reckoning: everywhere
+    if (w==='night') {
+        for(let i=0;i<2;i++){
+            const angle=rng()*Math.PI*2, r=MOUNTAIN_R+200+rng()*600;
+            spawnGTEnemy('falseBuddy',Math.cos(angle)*r,Math.sin(angle)*r);
+        }
+    } else if (w==='reckoning') {
+        for(let i=0;i<5;i++){
+            const angle=rng()*Math.PI*2, r=TOWN_R+rng()*(MOUNTAIN_R-TOWN_R);
+            spawnGTEnemy('falseBuddy',Math.cos(angle)*r,Math.sin(angle)*r);
+        }
+    }
+}
+
+function spawnGTEnemy(type, wx, wz) {
+    const def = GT_ENEMY_DEFS[type];
+    if (!def) return;
+    const enemy = { type, def, x:wx, y:0, z:wz, vx:0, vz:0,
+        sprite:null, lastHit:0, statuePhase:0, statuePhaseTimer:0, lastMove:0 };
+    getSpriteTexture(type, def, tex => {
+        const mat = new THREE.SpriteMaterial({map:tex,transparent:true,depthTest:true,depthWrite:false,sizeAttenuation:true});
+        if (def.tint) mat.color.set(def.tint);
+        const sp = new THREE.Sprite(mat);
+        sp.scale.set(def.size, def.size, 1);
+        sp.position.set(wx, def.size*0.5, wz);
+        sp.userData.enemyType = type;
+        gtScene.add(sp);
+        enemy.sprite = sp;
+    });
+    gtEnemies.push(enemy);
+}
+
+// ── Update ────────────────────────────────────────────────────────────
+let gtLastCheck = 0;
+
+function updateGhostTown(dt) {
+    if (currentDim !== 'ghosttown') return;
+    const now = Date.now();
+
+    // Rain particle drift
+    if (gtRainParticles) {
+        const pos3 = gtRainParticles.geometry.attributes.position;
+        for (let i=0; i<pos3.count; i++) {
+            let y = pos3.getY(i) - 300*dt;
+            if (y < 0) y = 600;
+            pos3.setY(i, y);
+            pos3.setX(i, pos3.getX(i) + 20*dt);
+        }
+        pos3.needsUpdate = true;
+    }
+
+    // Reckoning screen shake
+    if (gtReckoningShake) {
+        const s = Math.sin(now*0.02)*2.5;
+        document.getElementById('c').style.transform = `translate(${s}px,${s*0.5}px)`;
+    }
+
+    // Wet / slow from rain
+    if (gtWeather === 'rainy' && !gtInInterior) {
+        if (!gtWet) { gtWet=true; gtWetTimer=now; }
+        if (now - gtWetTimer > 30000 && gtSlowTimer === 0) {
+            gtSlowTimer = now;
+            showGTMsg('You got drenched! Movement slowed.');
+            setTimeout(()=>showGTMsg(''),3000);
+        }
+    } else {
+        gtWet = false;
+        if (gtSlowTimer > 0 && now - gtSlowTimer > 60000) gtSlowTimer = 0;
+    }
+
+    // Interior E-key exit
+    if (gtInInterior && keys['KeyE']) {
+        keys['KeyE'] = false;
+        leaveInterior();
+        return;
+    }
+
+    // Door proximity check
+    if (!gtInInterior && now - gtLastCheck > 300) {
+        gtLastCheck = now;
+        checkGTDoors();
+    }
+
+    // Enemy AI
+    const spd = (gtSlowTimer > 0) ? GT_SPEED * 0.4 : GT_SPEED;
+    gtEnemies.forEach(e => {
+        if (!e.sprite) return;
+        const pdx = pos.x - e.x, pdz = pos.z - e.z;
+        const pdist = Math.sqrt(pdx*pdx + pdz*pdz);
+
+        if (e.type === 'statue') {
+            // Bursts: moves 0.5s every 2s
+            e.statuePhaseTimer += dt;
+            if (e.statuePhase === 0 && e.statuePhaseTimer > 2.0) {
+                e.statuePhase = 1; e.statuePhaseTimer = 0;
+            } else if (e.statuePhase === 1 && e.statuePhaseTimer > 0.5) {
+                e.statuePhase = 0; e.statuePhaseTimer = 0;
+            }
+            if (e.statuePhase === 1) {
+                const len = pdist || 1;
+                e.x += (pdx/len)*e.def.speed*dt;
+                e.z += (pdz/len)*e.def.speed*dt;
+            }
+            if (pdist < 60 && now - e.lastHit > 2000) {
+                e.lastHit = now; dealGTDmg(30); showGTMsg('A Statue got you!'); setTimeout(()=>showGTMsg(''),2000);
+            }
+
+        } else if (e.type === 'spiderRed') {
+            const len = pdist || 1;
+            e.x += (pdx/len)*e.def.speed*dt;
+            e.z += (pdz/len)*e.def.speed*dt;
+            if (pdist < 60 && now - e.lastHit > 1500) {
+                e.lastHit = now; dealGTDmg(15); showGTMsg('A spider bit you!'); setTimeout(()=>showGTMsg(''),1500);
+            }
+
+        } else if (e.type === 'spider') {
+            // Wander aimlessly
+            if (Math.random() < 0.01) { e.vx=(Math.random()-0.5)*80; e.vz=(Math.random()-0.5)*80; }
+            e.x += e.vx*dt; e.z += e.vz*dt;
+
+        } else if (e.type === 'falseBuddy') {
+            // Can't enter town unless reckoning
+            const inTown = Math.sqrt(e.x*e.x+e.z*e.z) < TOWN_R;
+            if (inTown && gtWeather !== 'reckoning') {
+                // Push back out
+                const len = Math.sqrt(e.x*e.x+e.z*e.z)||1;
+                e.x += (e.x/len)*e.def.speed*dt;
+                e.z += (e.z/len)*e.def.speed*dt;
+            } else {
+                const len = pdist || 1;
+                e.x += (pdx/len)*e.def.speed*dt;
+                e.z += (pdz/len)*e.def.speed*dt;
+            }
+            if (pdist < 70 && now - e.lastHit > 2000) {
+                e.lastHit = now; dealGTDmg(25); showGTMsg('The False Buddy hit you!'); setTimeout(()=>showGTMsg(''),2000);
+            }
+        }
+
+        if (e.sprite) e.sprite.position.set(e.x, e.def.size*0.5, e.z);
+    });
+}
+
+function checkGTDoors() {
+    const prompt = document.getElementById('portal-prompt');
+    const interact = document.getElementById('bsmt-interact');
+
+    // Return portal — near world edge north
+    if (pos.z < -GT_SIZE + 200 || (pos.x*pos.x+pos.z*pos.z) < 50*50 && gtInInterior===false) {
+        // Check near hub exit (centre start)
+    }
+
+    // Check building doors
+    let nearDoor = null;
+    for (let i=0; i<gtBuildings.length; i++) {
+        const b = gtBuildings[i];
+        const dx = pos.x - b.x, dz = pos.z - b.z;
+        const dist = Math.sqrt(dx*dx+dz*dz);
+        if (dist < b.sz.d/2 + 80) { nearDoor = i; break; }
+    }
+
+    if (nearDoor !== null) {
+        interact.innerText = '[ E ] Enter building'; interact.style.display='block';
+        prompt.style.display = 'none';
+        if (keys['KeyE']) { keys['KeyE']=false; enterInterior(nearDoor); }
+    } else {
+        interact.style.display = 'none';
+        // Return to hub
+        const distCenter = Math.sqrt(pos.x*pos.x + pos.z*pos.z);
+        if (distCenter < 100 && pos.z > -50) {
+            // near spawn — check for hub exit sign
+        }
+        // Hub portal on south edge of town
+        const dHub = Math.sqrt(pos.x*pos.x + (pos.z - (TOWN_R-80))**2);
+        if (dHub < 100) {
+            prompt.innerText='[ E ] Return to Hub'; prompt.style.display='block';
+            if(keys['KeyE']){keys['KeyE']=false; exitGhostTown();}
+        } else {
+            prompt.style.display='none';
+        }
+    }
+}
+
+function dealGTDmg(amount) {
+    const now=Date.now();
+    if(now-gtDmgTime<500) return;
+    gtDmgTime=now;
+    playerHP_gt=Math.max(0,playerHP_gt-amount);
+    updateHPUI_gt();
+    const flash=document.createElement('div');
+    flash.style.cssText='position:fixed;inset:0;background:rgba(235,77,75,0.3);pointer-events:none;z-index:9000;';
+    document.body.appendChild(flash); setTimeout(()=>flash.remove(),180);
+    if(playerHP_gt<=0){showGTMsg('You died... returning to Hub.'); setTimeout(()=>{playerHP_gt=100;exitGhostTown();},2500);}
+}
+function updateHPUI_gt() {
+    document.getElementById('hp-val').innerText=Math.ceil(playerHP_gt);
+    const pct=playerHP_gt/100*100;
+    const fill=document.getElementById('hp-fill');
+    fill.style.width=pct+'%';
+    fill.style.background=pct>60?'var(--primary)':pct>30?'#f39c12':'#eb4d4b';
+}
+function showGTMsg(msg) {
+    const el=document.getElementById('bsmt-msg');
+    if(!el) return;
+    el.innerText=msg; el.style.display=msg?'block':'none';
+}
 
 // Room type enum strings (never shown to player)
 const RTYPES = ['meeting','darkplace','plain','generator','carousel',
@@ -1680,819 +2461,6 @@ function addLightbulb(grp, x, y, z, roomType) {
     }
 }
 
-// ── Room objects ──────────────────────────────────────────────────────
-function addRoomObjects(grp, room, RW, RH, RD) {
-    const type = room.type;
-
-    // Only meeting rooms get their structural furniture — everything else is empty
-    if (type === 'meeting' || type === 'falsemeeting') {
-        const numChairs = type === 'meeting' ? 2 : 1;
-        const table = new THREE.Mesh(new THREE.BoxGeometry(80,8,40), bMat(0x5c3a1e));
-        table.position.set(0, 35, 0);
-        table.userData.isTable = true;
-        grp.add(table);
-        for (let c = 0; c < numChairs; c++) {
-            const side  = c === 0 ? -1 : 1;
-            const chair = makeChair(bMat(0x3a2010));
-            chair.position.set(side * 60, 0, 0);
-            chair.rotation.y = c === 0 ? Math.PI/2 : -Math.PI/2;
-            chair.userData.isSittable = true;
-            chair.userData.chairIdx   = c;
-            chair.userData.roomKey    = `${room.gx},${room.gz}`;
-            grp.add(chair);
-        }
-    }
-
-    if (type === 'generator') {
-        const gen = new THREE.Mesh(new THREE.BoxGeometry(60,80,40), bMat(0x888888,0xffcc00,0.15));
-        gen.position.set(0, 40, -RD/2 + 60);
-        gen.userData.isGenerator = true;
-        grp.add(gen);
-        const sw = new THREE.Mesh(new THREE.BoxGeometry(12,20,8), bMat(0xdd3333));
-        sw.position.set(20, 70, -RD/2 + 42);
-        sw.userData.isSwitch = true;
-        grp.add(sw);
-    }
-
-    if (type === 'toilet') {
-        const toilet = makeToilet();
-        toilet.userData.isToilet = true;
-        grp.add(toilet);
-    }
-}
-
-function makeChair(mat) {
-    const g = new THREE.Group();
-    const seat = new THREE.Mesh(new THREE.BoxGeometry(28,4,28), mat); seat.position.y=28; g.add(seat);
-    const back = new THREE.Mesh(new THREE.BoxGeometry(28,36,4), mat);  back.position.set(0,48,-12); g.add(back);
-    for(let lx of [-10,10]) for(let lz of [-10,10]) {
-        const leg = new THREE.Mesh(new THREE.CylinderGeometry(2,2,28,4), mat);
-        leg.position.set(lx,14,lz); g.add(leg);
-    }
-    return g;
-}
-function makeToilet() {
-    const g = new THREE.Group();
-    const base = new THREE.Mesh(new THREE.BoxGeometry(30,30,40), bMat(0xeeeeee)); base.position.y=15; g.add(base);
-    const top  = new THREE.Mesh(new THREE.BoxGeometry(32,6,42),  bMat(0xdddddd)); top.position.y=33; g.add(top);
-    const tank = new THREE.Mesh(new THREE.BoxGeometry(28,34,14), bMat(0xeeeeee)); tank.position.set(0,32,-18); g.add(tank);
-    return g;
-}
-function makeMiniTree() {
-    const g = new THREE.Group();
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(2,3,20,5), bMat(0x5c3317));
-    trunk.position.y=10; g.add(trunk);
-    const foliage = new THREE.Mesh(new THREE.ConeGeometry(12,24,6), bMat(0x1e6b2e));
-    foliage.position.y=30; g.add(foliage);
-    return g;
-}
-function addPlayEquipment(grp, RW, RH, RD) {
-    // Monkey bars
-    const barMat = bMat(0x888888);
-    const bars   = new THREE.Group();
-    for(let i=0;i<6;i++) {
-        const b = new THREE.Mesh(new THREE.CylinderGeometry(2,2,60,6), barMat);
-        b.rotation.z = Math.PI/2; b.position.set(-75+i*30, 110, -RD/2+60);
-        bars.add(b);
-    }
-    const sideL = new THREE.Mesh(new THREE.CylinderGeometry(2,2,60,6), barMat);
-    sideL.position.set(-75, 80, -RD/2+60); bars.add(sideL);
-    const sideR = sideL.clone(); sideR.position.x = 75; bars.add(sideR);
-    bars.userData.isMonkeyBars = true;
-    grp.add(bars);
-
-    // Slide
-    const slide = new THREE.Mesh(new THREE.BoxGeometry(40,4,120), bMat(0xee4444));
-    slide.rotation.x = -Math.PI/6; slide.position.set(RW/2-60, 40, 0);
-    slide.userData.isSlide = true;
-    grp.add(slide);
-
-    // Hollow log
-    const log = new THREE.Mesh(new THREE.CylinderGeometry(18,18,80,10,1,true), bMat(0x5c3317));
-    log.rotation.z = Math.PI/2; log.position.set(-RW/2+80, 18, RD/2-80);
-    grp.add(log);
-
-    // Plastic tree
-    const ptree = new THREE.Group();
-    const ptrunk = new THREE.Mesh(new THREE.CylinderGeometry(5,5,60,8), bMat(0x228822));
-    ptrunk.position.y=30; ptree.add(ptrunk);
-    const pfoliage = new THREE.Mesh(new THREE.SphereGeometry(28,8,8), bMat(0x33cc33));
-    pfoliage.position.y=75; ptree.add(pfoliage);
-    ptree.position.set(RW/2-50, 0, -RD/2+50);
-    grp.add(ptree);
-}
-
-function addHazards(grp, room, RW, RH, RD, rng2) {
-    const allHazards = [
-        'acid_pipe','puddle','hot_pipe','toxic_puddle','stuck_door','bite_tongue','rust_tetanus'
-    ];
-    // Pick 3 random unique hazards
-    const picked = [];
-    while(picked.length < 3) {
-        const h = allHazards[Math.floor(rng2() * allHazards.length)];
-        if (!picked.includes(h)) picked.push(h);
-    }
-    picked.forEach((h, i) => {
-        const ox = (rng2()-0.5)*RW*0.6, oz = (rng2()-0.5)*RD*0.6;
-        let mesh;
-        if (h === 'acid_pipe' || h === 'hot_pipe') {
-            mesh = new THREE.Mesh(new THREE.CylinderGeometry(6,6,80,8), bMat(h==='acid_pipe'?0x33aa33:0xcc4400));
-            mesh.rotation.z = Math.PI/2; mesh.position.set(ox, 50, oz);
-        } else if (h === 'puddle' || h === 'toxic_puddle') {
-            mesh = new THREE.Mesh(new THREE.CylinderGeometry(20,20,2,12), bMat(h==='puddle'?0x334455:0x226622));
-            mesh.position.set(ox, 1, oz);
-        } else {
-            mesh = new THREE.Mesh(new THREE.BoxGeometry(10,10,10), bMat(0x884422));
-            mesh.position.set(ox, 5, oz);
-        }
-        mesh.userData.isHazard = true;
-        mesh.userData.hazardType = h;
-        mesh.userData.roomKey = `${room.gx},${room.gz}`;
-        grp.add(mesh);
-    });
-
-    // Pipes on walls as decoration
-    for(let p=0;p<4;p++) {
-        const pipe = new THREE.Mesh(new THREE.CylinderGeometry(4,4,RH*0.7,6), bMat(0x666666));
-        pipe.position.set((rng2()-0.5)*RW*0.7, RH*0.35, (rng2()-0.5)*RD*0.7);
-        grp.add(pipe);
-    }
-}
-
-function addObjects(grp, room, RW, RH, RD, rng2) {
-    const OBJECT_TYPES = ['teddy','soccerball','cube','watch','chair','pipe'];
-    // Check adjacency for paper warnings
-    const neighbors = getNeighborTypes(room.gx, room.gz);
-    const nearDark = neighbors.includes('darkplace');
-
-    const count = 1 + Math.floor(rng2() * 2);
-    for (let i=0; i<count; i++) {
-        const ot = OBJECT_TYPES[Math.floor(rng2()*OBJECT_TYPES.length)];
-        const ox = (rng2()-0.5)*RW*0.5, oz = (rng2()-0.5)*RD*0.5;
-        let mesh;
-        switch(ot) {
-            case 'teddy':
-                mesh = new THREE.Mesh(new THREE.SphereGeometry(12,8,8), bMat(0xcc9966)); mesh.position.set(ox,12,oz); break;
-            case 'soccerball':
-                mesh = new THREE.Mesh(new THREE.SphereGeometry(10,8,8), bMat(0xffffff)); mesh.position.set(ox,10,oz);
-                mesh.userData.isSoccerBall=true; break;
-            case 'cube':
-                const cols=[0xee3333,0xeeee33,0x3333ee];
-                mesh = new THREE.Mesh(new THREE.BoxGeometry(16,16,16),bMat(cols[Math.floor(rng2()*3)]));
-                mesh.position.set(ox,8,oz); break;
-            case 'watch':
-                mesh = new THREE.Mesh(new THREE.BoxGeometry(12,4,20),bMat(0x666666)); mesh.position.set(ox,40,oz);
-                mesh.userData.isWatch=true; break;
-            case 'chair':
-                mesh = makeChair(bMat(0x3a2010)); mesh.position.set(ox,0,oz);
-                mesh.userData.isSittable=true; mesh.userData.chairIdx=-1; break;
-            case 'pipe':
-                mesh = new THREE.Mesh(new THREE.CylinderGeometry(4,4,RH,6),bMat(0x666666));
-                mesh.position.set(ox,RH/2,oz); break;
-        }
-        if(mesh) { grp.add(mesh); }
-    }
-
-    // Paper near dark room
-    if (nearDark) {
-        const paper = new THREE.Mesh(new THREE.PlaneGeometry(24,32), bMat(0xeeeecc));
-        paper.position.set(-RW/2+8, 60, (rng2()-0.5)*RD*0.4);
-        paper.rotation.y = Math.PI/2;
-        paper.userData.isPaper1 = true;
-        grp.add(paper);
-    }
-    // Paper 2 — random
-    if (rng2() < 0.3) {
-        const p2 = new THREE.Mesh(new THREE.PlaneGeometry(24,32), bMat(0xffeedd));
-        p2.position.set(RW/2-8, 60, (rng2()-0.5)*RD*0.4);
-        p2.rotation.y = -Math.PI/2;
-        p2.userData.isPaper2 = true;
-        grp.add(p2);
-    }
-}
-
-function getNeighborTypes(gx, gz) {
-    const types = [];
-    [[gx,gz-1],[gx,gz+1],[gx-1,gz],[gx+1,gz]].forEach(([nx,nz]) => {
-        const r = bsmtRooms[`${nx},${nz}`];
-        if(r) types.push(r.type);
-    });
-    return types;
-}
-
-// ── Procedural room generation ────────────────────────────────────────
-function generateBasement() {
-    if (myName !== 'bartelsfamily5') return;
-    // Wipe existing
-    Object.keys(bsmtMeshes).forEach(k => { bsmtScene.remove(bsmtMeshes[k]); delete bsmtMeshes[k]; });
-    bsmtRooms = {}; generatorExists = false;
-
-    // Build a grid of rooms via BFS from 0,0
-    const queue = [{gx:0,gz:0,type:'starting'}];
-    const visited = new Set(['0,0']);
-    bsmtRooms['0,0'] = makeRoom('starting',0,0);
-
-    while(queue.length) {
-        const {gx,gz} = queue.shift();
-        const DIRS_GRID = [{dx:0,dz:-1,door:'N',opp:'S'},{dx:0,dz:1,door:'S',opp:'N'},{dx:1,dz:0,door:'E',opp:'W'},{dx:-1,dz:0,door:'W',opp:'E'}];
-        const currentRoom = bsmtRooms[`${gx},${gz}`];
-        const isStarting  = currentRoom.type === 'starting';
-
-        // Starting room: expand in all 4 dirs. All other rooms: only expand from their OWN door count.
-        // Each non-starting room already has its entry door set. Give it 0-1 EXIT doors so hallways stay linear.
-        const shuffled = DIRS_GRID.sort(()=>Math.random()-0.5);
-        const exitDoors = isStarting ? 4 : (Math.random() < 0.55 ? 1 : 0); // 55% chance of 1 exit, rest are dead ends
-        let added = 0;
-
-        for (const d of shuffled) {
-            if (added >= exitDoors) break;
-            // Don't put a door where one already exists (the entry)
-            if (currentRoom.doors[d.door]) continue;
-            const nk = `${gx+d.dx},${gz+d.dz}`;
-            if (visited.has(nk)) continue;
-            const neighborTypes = getNeighborTypesFromGrid(gx+d.dx, gz+d.dz);
-            const rtype = pickRoomType(neighborTypes);
-            visited.add(nk);
-            const nr = makeRoom(rtype, gx+d.dx, gz+d.dz);
-            bsmtRooms[nk] = nr;
-            currentRoom.doors[d.door] = true;
-            nr.doors[d.opp] = true;
-            if (visited.size < 50) queue.push({gx:gx+d.dx,gz:gz+d.dz});
-            added++;
-        }
-    }
-
-    // Build all meshes
-    Object.entries(bsmtRooms).forEach(([k,v]) => buildRoomMesh(k,v));
-
-    // Save to Firebase
-    db.ref('cd_basement_rooms').set({ rooms: bsmtRooms, generatorExists, generated: Date.now() });
-    db.ref('cd_basement_lights').set(true);
-    showPetNotif('🔦 Basement generated!');
-}
-
-function getNeighborTypesFromGrid(gx,gz) {
-    const types=[];
-    [[gx,gz-1],[gx,gz+1],[gx-1,gz],[gx+1,gz]].forEach(([nx,nz])=>{
-        const r=bsmtRooms[`${nx},${nz}`]; if(r) types.push(r.type);
-    });
-    return types;
-}
-
-function pickRoomType(neighborTypes) {
-    const pool = [...RTYPES];
-    // Remove types that are already adjacent (no 2 same touching, except plain)
-    const filteredPool = pool.filter(t => t==='plain' || !neighborTypes.includes(t));
-    // Generator: only 1 allowed, 1/75 chance
-    if (!generatorExists && Math.random() < 1/75) {
-        generatorExists = true;
-        return 'generator';
-    }
-    // No generator in pool if already exists
-    const finalPool = filteredPool.filter(t => t!=='generator');
-    if (finalPool.length === 0) return 'plain';
-    return finalPool[Math.floor(Math.random()*finalPool.length)];
-}
-
-// ── Check and generate rooms when player walks into doorways ─────────
-function checkBasementDoors() {
-    const prompt = document.getElementById('portal-prompt');
-    // Find which room player is in
-    const gx = Math.round(pos.x / ROOM_W);
-    const gz = Math.round(pos.z / ROOM_W);
-    const roomKey = `${gx},${gz}`;
-    const room = bsmtRooms[roomKey];
-    if (!room) { prompt.style.display='none'; return; }
-
-    const rx = gx * ROOM_W, rz = gz * ROOM_W;
-    const isBig = false;
-    const half = ROOM_W / 2;
-
-    // Check if near a door gap → generate neighbor room
-    const DIRS_GRID = [{dx:0,dz:-1,door:'N',opp:'S'},{dx:0,dz:1,door:'S',opp:'N'},{dx:1,dz:0,door:'E',opp:'W'},{dx:-1,dz:0,door:'W',opp:'E'}];
-    DIRS_GRID.forEach(d => {
-        if (!room.doors[d.door]) return;
-        const nk = `${gx+d.dx},${gz+d.dz}`;
-        if (!bsmtRooms[nk]) {
-            // Generate new room on the fly
-            const neighborTypes = getNeighborTypes(gx+d.dx, gz+d.dz);
-            const rtype = pickRoomType(neighborTypes);
-            const nr = makeRoom(rtype, gx+d.dx, gz+d.dz);
-            nr.doors[d.opp] = true;
-            bsmtRooms[nk] = nr;
-            buildRoomMesh(nk, nr);
-            db.ref(`cd_basement_rooms/rooms/${nk.replace(',','_')}`).set(nr);
-        }
-    });
-
-    // Return to hub prompt near entry door (south edge of starting room)
-    const distToStart = Math.sqrt(pos.x*pos.x + pos.z*pos.z);
-    if (gx===0&&gz===0 && pos.z > half-60) {
-        prompt.innerText='[ E ] Return to Hub'; prompt.style.display='block';
-        if(keys['KeyE']){keys['KeyE']=false; exitBasement();}
-    } else {
-        prompt.style.display='none';
-    }
-
-    // Chair interaction
-    checkChairInteraction(room, rx, rz);
-    checkObjectInteraction(room, rx, rz);
-}
-
-// ── Chair sitting ──────────────────────────────────────────────────────
-function checkChairInteraction(room, rx, rz) {
-    const interact = document.getElementById('bsmt-interact');
-    if(room.type!=='meeting'&&room.type!=='falsemeeting'&&room.type!=='plain'&&room.type!=='hostile') { interact.style.display='none'; return; }
-
-    // Check if player is near a sittable object
-    const grp = bsmtMeshes[`${room.gx},${room.gz}`];
-    if(!grp) return;
-
-    let nearChair = null;
-    grp.traverse(obj => {
-        if(!obj.userData.isSittable) return;
-        const wp = new THREE.Vector3();
-        obj.getWorldPosition(wp);
-        const d = Math.sqrt((wp.x-pos.x)**2+(wp.z-pos.z)**2);
-        if(d < 60) nearChair = obj;
-    });
-
-    if(nearChair) {
-        interact.innerText='[ E ] Sit down'; interact.style.display='block';
-        if(keys['KeyE']) {
-            keys['KeyE']=false;
-            startSitting(nearChair, room);
-        }
-    } else {
-        if(sittingChair) stopSitting();
-        interact.style.display='none';
-    }
-}
-
-let sittingInterval = null;
-function startSitting(chairObj, room) {
-    if(sittingChair) return;
-    sittingChair = { obj: chairObj, room, time: Date.now() };
-    const interact = document.getElementById('bsmt-interact');
-    interact.innerText='[ E ] Stand up';
-
-    if(room.type==='falsemeeting' && chairObj.userData.chairIdx === 0) {
-        // Awaken False Buddy after 3s
-        setTimeout(()=>{
-            if(!sittingChair) return;
-            showBsmtMsg('Something feels wrong...');
-            setTimeout(()=>{
-                if(!sittingChair) return;
-                showBsmtMsg('');
-                spawnFalseBuddy(room.gx*ROOM_W, room.gz*ROOM_W);
-            }, 2000);
-        }, 3000);
-    }
-
-    if(room.type==='meeting') {
-        sittingInterval = setInterval(()=>{
-            if(!sittingChair) { clearInterval(sittingInterval); return; }
-            const elapsed = (Date.now()-sittingChair.time)/1000;
-            if(elapsed > 20) {
-                showBsmtMsg('He has arrived. Leave immediately.');
-                setTimeout(()=>showBsmtMsg(''), 4000);
-                clearInterval(sittingInterval);
-                sittingChair = null;
-            }
-        }, 1000);
-    }
-
-    // Stand back up on E
-    keys['KeyE'] = false;
-}
-function stopSitting() {
-    sittingChair = null;
-    clearInterval(sittingInterval);
-    document.getElementById('bsmt-interact').style.display='none';
-}
-
-// ── Object interactions ────────────────────────────────────────────────
-function checkObjectInteraction(room, rx, rz) {
-    const grp = bsmtMeshes[`${room.gx},${room.gz}`];
-    if(!grp) return;
-
-    bRay.setFromCamera(bMouse, bsmtCamera);
-    const objects = [];
-    grp.traverse(obj=>{ if(obj.isMesh) objects.push(obj); });
-    const hits = bRay.intersectObjects(objects);
-    if(!hits.length) { bsmtInteract=null; return; }
-    const hit = hits[0].object;
-
-    if(hit.userData.isToilet) {
-        document.getElementById('bsmt-interact').innerText='[ E ] Flush'; document.getElementById('bsmt-interact').style.display='block';
-        if(keys['KeyE']) {
-            keys['KeyE']=false; toiletClicks++;
-            if(toiletClicks <= 10)        showBsmtMsg("It's a toilet.");
-            else if(toiletClicks <= 50)   showBsmtMsg("It's still a toilet.");
-            else if(toiletClicks <= 100)  showBsmtMsg("You don't get anything from clicking on this toilet.");
-            else { toiletClicks=0; showBsmtMsg("It's a toilet."); }
-            setTimeout(()=>showBsmtMsg(''),2000);
-        }
-    } else if(hit.userData.isGenerator || hit.userData.isSwitch) {
-        document.getElementById('bsmt-interact').innerText='[ E ] Toggle Power'; document.getElementById('bsmt-interact').style.display='block';
-        if(keys['KeyE']) {
-            keys['KeyE']=false;
-            db.ref('cd_basement_lights').set(!lightsOn);
-        }
-    } else if(hit.userData.isSoccerBall) {
-        document.getElementById('bsmt-interact').innerText='[ E ] Kick'; document.getElementById('bsmt-interact').style.display='block';
-        if(keys['KeyE']) { keys['KeyE']=false; showBsmtMsg('Made of concrete.'); setTimeout(()=>showBsmtMsg(''),2000); }
-    } else if(hit.userData.isSlide) {
-        document.getElementById('bsmt-interact').innerText='[ E ] Slide!'; document.getElementById('bsmt-interact').style.display='block';
-        if(keys['KeyE']) { keys['KeyE']=false; showBsmtMsg('Wheee!'); setTimeout(()=>showBsmtMsg(''),1500); }
-    } else if(hit.userData.isPaper1) {
-        document.getElementById('bsmt-interact').innerText='[ E ] Read'; document.getElementById('bsmt-interact').style.display='block';
-        if(keys['KeyE']) { keys['KeyE']=false; showBsmtMsg("DON'T TURN OFF THE LIGHTS"); setTimeout(()=>showBsmtMsg(''),3000); }
-    } else if(hit.userData.isPaper2) {
-        document.getElementById('bsmt-interact').innerText='[ E ] Read'; document.getElementById('bsmt-interact').style.display='block';
-        if(keys['KeyE']) { keys['KeyE']=false; showBsmtMsg('Come Visit The Play Room!'); setTimeout(()=>showBsmtMsg(''),2500); }
-    } else if(hit.userData.isWatch) {
-        document.getElementById('bsmt-interact').innerText='[ E ] Check time'; document.getElementById('bsmt-interact').style.display='block';
-        if(keys['KeyE']) {
-            keys['KeyE']=false;
-            const now2=new Date();
-            const est = now2.toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit'});
-            showBsmtMsg(est); setTimeout(()=>showBsmtMsg(''),3000);
-        }
-    } else if(hit.userData.isHazard) {
-        triggerHazard(hit.userData.hazardType);
-    } else {
-        document.getElementById('bsmt-interact').style.display='none';
-    }
-}
-
-// ── Hazards ────────────────────────────────────────────────────────────
-const HAZARD_DEBUFFS = {};
-function triggerHazard(type) {
-    const now2=Date.now();
-    if(now2-lastDmgTime<1500) return;
-    lastDmgTime=now2;
-    let dmg=0, msg='';
-    switch(type){
-        case 'acid_pipe':     dmg=30; msg='💚 Acid burns you!'; break;
-        case 'puddle':        dmg=20; msg='💧 You slipped!'; break;
-        case 'hot_pipe':      dmg=15; msg='🔥 You burned your hand!'; break;
-        case 'toxic_puddle':  dmg=30; msg='☣️ Toxic waste!'; break;
-        case 'stuck_door':    dmg=10; msg='🚪 Your hand got stuck in the door!'; break;
-        case 'bite_tongue':   dmg=5;  msg='😬 You bit your tongue slipping!'; break;
-        case 'rust_tetanus':
-            dmg=0; msg='🩹 The rust gave you tetanus!';
-            if(!HAZARD_DEBUFFS.tetanus){
-                HAZARD_DEBUFFS.tetanus=true;
-                let ticks=0;
-                const iv=setInterval(()=>{
-                    ticks++;
-                    dealDmg(20/30);
-                    if(ticks>=30){clearInterval(iv);HAZARD_DEBUFFS.tetanus=false;}
-                },1000);
-            }
-            break;
-    }
-    if(dmg>0) dealDmg(dmg);
-    showBsmtMsg(msg); setTimeout(()=>showBsmtMsg(''),2000);
-}
-
-function dealDmg(amount) {
-    playerHP = Math.max(0, playerHP - amount);
-    updateHPUI();
-    const flash = document.createElement('div');
-    flash.style.cssText='position:fixed;inset:0;background:rgba(235,77,75,0.3);pointer-events:none;z-index:9000;';
-    document.body.appendChild(flash); setTimeout(()=>flash.remove(),180);
-    if(playerHP<=0) { showBsmtMsg('You died... returning to Hub.'); setTimeout(()=>{ playerHP=MAX_HP; exitBasement(); },2500); }
-}
-
-function updateHPUI() {
-    document.getElementById('hp-val').innerText = Math.ceil(playerHP);
-    const pct = playerHP/MAX_HP*100;
-    const fill=document.getElementById('hp-fill');
-    fill.style.width=pct+'%';
-    fill.style.background=pct>60?'var(--primary)':pct>30?'#f39c12':'#eb4d4b';
-}
-
-// ── Light state ─────────────────────────────────────────────────────────
-function applyLightState() {
-    if(!bsmtScene) return;
-    bsmtScene.traverse(obj => {
-        if(obj.isLight && obj.userData.isRoomLight) {
-            obj.intensity = lightsOn ? 1.8 : 0;
-        }
-    });
-    if(!lightsOn) spawnLightGuides();
-    else clearLightGuides();
-}
-function spawnLightGuides() {
-    clearLightGuides();
-    for(let i=0;i<3;i++) {
-        getSpriteTexture('lightguide', {img:'enemies/lightguide.png'}, tex=>{
-            const mat = new THREE.SpriteMaterial({map:tex,transparent:true,depthTest:true,depthWrite:false});
-            const sp = new THREE.Sprite(mat);
-            sp.scale.set(20,20,1);
-            // Start near player
-            sp.position.set(pos.x+(Math.random()-0.5)*60, 40, pos.z+(Math.random()-0.5)*60);
-            sp.userData.isLightGuide=true;
-            bsmtScene.add(sp);
-            lightGuides.push({ mesh:sp, offset:{x:(i-1)*30,z:0} });
-            // Give off glow
-            const gl=new THREE.PointLight(0x8888ff,1.5,120);
-            gl.position.copy(sp.position);
-            sp.add(gl);
-        });
-    }
-}
-function clearLightGuides() {
-    lightGuides.forEach(g=>bsmtScene?.remove(g.mesh));
-    lightGuides=[];
-}
-
-// ── Enemies ──────────────────────────────────────────────────────────
-function spawnRoomEnemies(room, wx, wz, RW, RD) {
-    const rng3 = seededRand((room.gx*53+room.gz*37+7)%9999);
-
-    if (room.type === 'darkplace') {
-        const count = 1 + Math.floor(rng3()*2);
-        for (let i=0; i<count; i++) {
-            const ex = wx+(rng3()-0.5)*RW*0.5, ez = wz+(rng3()-0.5)*RD*0.5;
-            spawnBsmtEnemy('statue', ex, 0, ez, room);
-        }
-    }
-
-    if (room.type === 'buddyspace' || room.type === 'plain') {
-        const count = 1 + Math.floor(rng3()*3);
-        for (let i=0; i<count; i++) {
-            const ex = wx+(rng3()-0.5)*RW*0.4, ez = wz+(rng3()-0.5)*RD*0.4;
-            spawnBsmtEnemy('buddy', ex, 0, ez, room);
-        }
-    }
-
-    // Spiders spawn in ANY room, 40% chance, 1-2 per room
-    if (rng3() < 0.4) {
-        const count = 1 + Math.floor(rng3() * 2);
-        for (let i=0; i<count; i++) {
-            const ex = wx+(rng3()-0.5)*RW*0.4, ez = wz+(rng3()-0.5)*RD*0.4;
-            spawnBsmtEnemy('spider', ex, 0, ez, room);
-        }
-    }
-}
-
-const BSMT_ENEMY_DEFS = {
-    statue:     {img:'enemies/statue.png',    speed:BSMT_SPEED*2, size:70, dmg:40},
-    buddy:      {img:'enemies/buddy.png',     speed:BSMT_SPEED*0.5, size:50, dmg:0},
-    spider:     {img:'enemies/giantspider.png', speed:0,              size:40, dmg:0,  tint:0xff4444},
-    falseBuddy: {img:'enemies/notbuddy.png',  speed:BSMT_SPEED*1.2, size:80, dmg:30},
-};
-
-function spawnBsmtEnemy(type, wx, wy, wz, room) {
-    const def = BSMT_ENEMY_DEFS[type];
-    if(!def) return;
-    const enemy = {type, def, x:wx, y:wy, z:wz, room,
-        vx:(Math.random()-0.5)*def.speed*0.3, vz:(Math.random()-0.5)*def.speed*0.3,
-        sprite:null, lastHit:0};
-    getSpriteTexture(type, def, tex=>{
-        const mat=new THREE.SpriteMaterial({map:tex,transparent:true,depthTest:true,depthWrite:false,sizeAttenuation:true});
-        if (def.tint) mat.color.set(def.tint);
-        const sp=new THREE.Sprite(mat);
-        sp.scale.set(def.size,def.size,1);
-        sp.position.set(wx,wy+def.size*0.5,wz);
-        sp.userData.enemyType=type;
-        sp.userData.clickable=true;
-        bsmtScene.add(sp);
-        enemy.sprite=sp;
-    });
-    bsmtEnemies.push(enemy);
-    return enemy;
-}
-
-function spawnFalseBuddy(wx, wz) {
-    const fb = spawnBsmtEnemy('falseBuddy', wx, 0, wz, null);
-    db.ref('cd_basement_falseBuddy').set({x:wx,z:wz,spawner:myName,time:Date.now()});
-}
-
-// ── Dark Room flicker ──────────────────────────────────────────────────
-let flickerTimeout = null;
-let darkRoomLightOn = false; // tracks current state for statue movement
-
-function getDarkRoomLight() {
-    // Find the PointLight for the current dark room
-    const gx = Math.round(pos.x / ROOM_W), gz = Math.round(pos.z / ROOM_W);
-    const grp = bsmtMeshes[`${gx},${gz}`];
-    if (!grp) return null;
-    let found = null;
-    grp.traverse(obj => { if (obj.isLight && obj.userData.isDarkRoomLight) found = obj; });
-    return found;
-}
-
-function startDarkRoomFlicker() {
-    darkRoomLightOn = false;
-    function flick() {
-        const light = getDarkRoomLight();
-        // Turn light ON for 0.5s
-        darkRoomLightOn = true;
-        if (light) light.intensity = 2.2;
-        flickerTimeout = setTimeout(() => {
-            // Turn light OFF
-            darkRoomLightOn = false;
-            if (light) light.intensity = 0;
-            // Wait 2-3s before next flicker
-            flickerTimeout = setTimeout(flick, 2000 + Math.random() * 1000);
-        }, 500);
-    }
-    flick();
-}
-
-function stopDarkRoomFlicker() {
-    clearTimeout(flickerTimeout);
-    darkRoomLightOn = false;
-    // Make sure light is off when leaving
-    const light = getDarkRoomLight();
-    if (light) light.intensity = 0;
-}
-
-// ── Carousel effect ────────────────────────────────────────────────────
-let carouselTimer = 0;
-let carouselTilt  = 0;
-function clearCarouselEffect() {
-    carouselInRoom=false; carouselTilt=0;
-    document.getElementById('c').style.transform='';
-}
-
-// ── Checkerboard messages ──────────────────────────────────────────────
-let lastCheckerMsg = 0;
-function triggerCheckerMsg() {
-    const now2=Date.now();
-    if(now2-lastCheckerMsg<4000) return;
-    lastCheckerMsg=now2;
-    if(Math.random()<0.3) {
-        const msg=CHECKER_MSGS[Math.floor(Math.random()*CHECKER_MSGS.length)];
-        showBsmtMsg(msg); setTimeout(()=>showBsmtMsg(''),1500);
-    }
-}
-
-// ── Update ─────────────────────────────────────────────────────────────
-let inDarkRoom=false;
-function updateBasement(dt) {
-    if(currentDim!=='basement') return;
-    const now2=Date.now();
-
-    // Which room is the player in?
-    const gx=Math.round(pos.x/ROOM_W), gz=Math.round(pos.z/ROOM_W);
-    const room=bsmtRooms[`${gx},${gz}`];
-
-    // Dark room flicker
-    const nowInDark = room?.type==='darkplace';
-    if(nowInDark&&!inDarkRoom){ inDarkRoom=true; startDarkRoomFlicker(); }
-    else if(!nowInDark&&inDarkRoom){ inDarkRoom=false; stopDarkRoomFlicker(); }
-
-    // Carousel tilt
-    carouselInRoom = room?.type==='carousel';
-    if(carouselInRoom) {
-        carouselTilt += dt*0.8;
-        document.getElementById('c').style.transform=`rotate(${Math.sin(carouselTilt)*4}deg)`;
-        // Spin carousel walls
-        const grp=bsmtMeshes[`${gx},${gz}`];
-        if(grp) grp.rotation.y+=dt*0.5;
-    } else {
-        if(document.getElementById('c').style.transform) clearCarouselEffect();
-    }
-
-    // Checkerboard messages
-    if(room?.type==='checkerboard') triggerCheckerMsg();
-
-    // Light guides follow player toward generator
-    lightGuides.forEach((g,i)=>{
-        const angle=now2*0.001+i*Math.PI*2/3;
-        g.mesh.position.set(pos.x+Math.cos(angle)*40, 40, pos.z+Math.sin(angle)*40);
-    });
-
-    // Enemy AI
-    bsmtEnemies.forEach(e=>{
-        if(!e.sprite) return;
-        const pdx=pos.x-e.x, pdz=pos.z-e.z;
-        const pdist=Math.sqrt(pdx*pdx+pdz*pdz);
-
-        if(e.type==='statue') {
-            // Only moves when the dark room light is ON AND player is NOT looking at it
-            if(darkRoomLightOn && !isLookingAt(e)) {
-                e.x+=pdx/(pdist||1)*e.def.speed*dt;
-                e.z+=pdz/(pdist||1)*e.def.speed*dt;
-            }
-            // Must stay inside dark room
-            if(e.room) {
-                const rx2=e.room.gx*ROOM_W, rz2=e.room.gz*ROOM_W;
-                e.x=Math.max(rx2-ROOM_W*0.7,Math.min(rx2+ROOM_W*0.7,e.x));
-                e.z=Math.max(rz2-ROOM_W*0.7,Math.min(rz2+ROOM_W*0.7,e.z));
-            }
-            if(pdist<60&&now2-e.lastHit>2000){
-                e.lastHit=now2; dealDmg(e.def.dmg);
-                showBsmtMsg('The Statue got you!'); setTimeout(()=>showBsmtMsg(''),2000);
-            }
-        } else if(e.type==='buddy') {
-            if(Math.random()<0.01){e.vx=(Math.random()-0.5)*e.def.speed;e.vz=(Math.random()-0.5)*e.def.speed;}
-            e.x+=e.vx*dt; e.z+=e.vz*dt;
-        } else if(e.type==='falseBuddy') {
-            // Chase player, pass through doors, repelled by meeting room
-            const curRoom=bsmtRooms[`${Math.round(e.x/ROOM_W)},${Math.round(e.z/ROOM_W)}`];
-            if(curRoom?.type==='meeting'||curRoom?.type==='falsemeeting') {
-                // Sink and die
-                e.y-=60*dt;
-                if(e.y<-100){
-                    bsmtScene.remove(e.sprite);
-                    bsmtEnemies.splice(bsmtEnemies.indexOf(e),1);
-                    db.ref('cd_basement_falseBuddy').remove();
-                    showBsmtMsg('The False Buddy has been vanquished!');
-                    setTimeout(()=>showBsmtMsg(''),3000);
-                    return;
-                }
-            } else {
-                e.x+=pdx/(pdist||1)*e.def.speed*dt;
-                e.z+=pdz/(pdist||1)*e.def.speed*dt;
-            }
-            if(pdist<70&&now2-e.lastHit>2000){
-                e.lastHit=now2; dealDmg(e.def.dmg);
-                showBsmtMsg('The False Buddy grabbed you!'); setTimeout(()=>showBsmtMsg(''),2000);
-            }
-        }
-        // Spider — stationary
-        if(e.sprite) e.sprite.position.set(e.x, e.y+e.def.size*0.5, e.z);
-    });
-
-    // Spider click to pet (raycaster)
-    const spiderSprites=bsmtEnemies.filter(e=>e.type==='spider'&&e.sprite).map(e=>e.sprite);
-    if(spiderSprites.length&&keys['KeyE']) {
-        bRay.setFromCamera(bMouse,bsmtCamera);
-        const hits=bRay.intersectObjects(spiderSprites);
-        if(hits.length){ keys['KeyE']=false; showBsmtMsg('The spider appreciates you! 🕸️'); setTimeout(()=>showBsmtMsg(''),2000); }
-    }
-}
-
-function isLookingAt(enemy) {
-    // Check if enemy is roughly in the centre of the screen
-    const wp=new THREE.Vector3(enemy.x,enemy.y+35,enemy.z);
-    const projected=wp.clone().project(bsmtCamera);
-    return Math.abs(projected.x)<0.35&&Math.abs(projected.y)<0.35&&projected.z<1;
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────
-function showBsmtMsg(msg) {
-    const el=document.getElementById('bsmt-msg');
-    el.innerText=msg;
-    el.style.display=msg?'block':'none';
-}
-
-// ── Basement wall collision ───────────────────────────────────────────
-const PLAYER_R = 18;
-
-function resolveBasementCollision() {
-    const gx = Math.round(pos.x / ROOM_W);
-    const gz = Math.round(pos.z / ROOM_W);
-
-    // Check current room and immediate neighbors so doorway transitions work
-    for (let ox = -1; ox <= 1; ox++) {
-        for (let oz = -1; oz <= 1; oz++) {
-            const rk   = `${gx+ox},${gz+oz}`;
-            const room = bsmtRooms[rk];
-            if (!room) continue;
-
-            // Always use fixed grid size — no big rooms, stops clipping
-            const half = ROOM_W / 2 - WALL_T / 2;
-            const rx   = room.gx * ROOM_W;
-            const rz2  = room.gz * ROOM_W;
-
-            const lx = pos.x - rx;
-            const lz = pos.z - rz2;
-
-            if (Math.abs(lx) > half + PLAYER_R * 4 || Math.abs(lz) > half + PLAYER_R * 4) continue;
-
-            const walls = [
-                { perpAxis:'z', perpLocal: lz, wallFace: -half, side: -1, door: 'N', paraLocal: lx },
-                { perpAxis:'z', perpLocal: lz, wallFace:  half, side:  1, door: 'S', paraLocal: lx },
-                { perpAxis:'x', perpLocal: lx, wallFace:  half, side:  1, door: 'E', paraLocal: lz },
-                { perpAxis:'x', perpLocal: lx, wallFace: -half, side: -1, door: 'W', paraLocal: lz },
-            ];
-
-            walls.forEach(w => {
-                const crossed = w.side > 0
-                    ? (w.perpLocal + PLAYER_R > w.wallFace)
-                    : (w.perpLocal - PLAYER_R < w.wallFace);
-                if (!crossed) return;
-
-                // Wider gap check — no PLAYER_R subtraction so doorways feel natural
-                if (room.doors[w.door] && Math.abs(w.paraLocal) < DOOR_W / 2) return;
-
-                if (w.perpAxis === 'z') {
-                    pos.z = rz2 + w.wallFace - w.side * PLAYER_R;
-                } else {
-                    pos.x = rx  + w.wallFace - w.side * PLAYER_R;
-                }
-            });
-        }
-    }
-}
-
 function loop() {
     requestAnimationFrame(loop);
     const dt = Math.min(clock3.getDelta(), 0.05);
@@ -2517,6 +2485,14 @@ function showPetNotif(msg) {
     petNotifTimer = setTimeout(() => el.style.display = 'none', 2500);
 }
 
+function updateHPUI() {
+    const hp = currentDim === 'ghosttown' ? playerHP_gt : 100;
+    document.getElementById('hp-val').innerText = Math.ceil(hp);
+    const pct = hp;
+    const fill = document.getElementById('hp-fill');
+    fill.style.width = pct + '%';
+    fill.style.background = pct>60 ? 'var(--primary)' : pct>30 ? '#f39c12' : '#eb4d4b';
+}
 function showMBDamage() {
     showPetNotif('💥 A Mountain Buddy hit you!');
     // Red flash overlay
