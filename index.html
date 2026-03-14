@@ -2865,7 +2865,7 @@ function generateMoon() {
     const bigCraterDist  = 0.20 + rng()*0.08;
     const bigCX = Math.cos(bigCraterAngle)*bigCraterDist + 0.5;
     const bigCZ = Math.sin(bigCraterAngle)*bigCraterDist + 0.5;
-    const bigCR    = 0.10 + rng()*0.05;
+    const bigCR    = 0.04 + rng()*0.02; // kept small so it doesn't eat the whole map
     const bigCDepth = -(450 + rng()*250);
     const bigCRimH  = 140 + rng()*100;
 
@@ -2940,20 +2940,25 @@ function generateMoon() {
             const u = ui/segs, v = vi/segs;
             const wx = (u-0.5)*MOON_SIZE*2, wz = (v-0.5)*MOON_SIZE*2;
 
-            // Base terrain — many frequencies, high amplitude, very bumpy
-            const f1=1/7000, f2=1/2500, f3=1/900, f4=1/300, f5=1/120, f6=1/50;
-            let h = (Math.sin(wx*f1*1.3+0.7)*Math.cos(wz*f1*0.9+0.3) +
-                     Math.sin(wx*f1*2.4+1.9)*Math.cos(wz*f1*1.8+0.5) +
-                     Math.cos(wx*f1*0.7+3.1)*Math.sin(wz*f1*1.2+2.4)) * 200
-                  + (Math.sin(wx*f2*1.1+2.1)*Math.cos(wz*f2*1.4+0.8) +
-                     Math.cos(wx*f2*2.3+0.4)*Math.sin(wz*f2*1.9+1.2) +
-                     Math.sin(wx*f2*3.1+1.5)*Math.cos(wz*f2*2.8+0.3)) * 100
-                  + (Math.sin(wx*f3*1.7+1.3)*Math.cos(wz*f3*2.1+0.6) +
-                     Math.cos(wx*f3*2.9+0.8)*Math.sin(wz*f3*1.4+2.1)) * 50
-                  + (Math.sin(wx*f4*2.2+0.9)*Math.cos(wz*f4*1.6+2.3) +
-                     Math.sin(wx*f4*3.3+1.7)*Math.cos(wz*f4*2.5+0.4)) * 22
-                  + (Math.sin(wx*f5*1.8+0.5)*Math.cos(wz*f5*2.3+1.1)) * 10
-                  + (Math.sin(wx*f6*2.1+1.4)*Math.cos(wz*f6*1.9+0.7)) * 4;
+            // Base terrain in UV space (u,v = 0..1) so scale is map-independent
+            const p = u * Math.PI * 2, q = v * Math.PI * 2;
+            let h =
+                // Tight medium hills — ~25 cycles, tall
+                (Math.sin(p*25+0.7)*Math.cos(q*22+0.3) +
+                 Math.sin(p*20+1.9)*Math.cos(q*28+0.5) +
+                 Math.cos(p*18+3.1)*Math.sin(q*24+2.4)) * 500
+                // Smaller bumps — ~55 cycles
+              + (Math.sin(p*55+2.1)*Math.cos(q*48+0.8) +
+                 Math.cos(p*60+0.4)*Math.sin(q*52+1.2) +
+                 Math.sin(p*45+1.5)*Math.cos(q*58+0.3)) * 220
+                // Rocky detail — ~110 cycles
+              + (Math.sin(p*110+1.3)*Math.cos(q*100+0.6) +
+                 Math.cos(p*120+0.8)*Math.sin(q*95+2.1)) * 90
+                // Fine bumps — ~220 cycles
+              + (Math.sin(p*220+0.9)*Math.cos(q*200+2.3) +
+                 Math.sin(p*240+1.7)*Math.cos(q*210+0.4)) * 35
+                // Tiny surface — ~400 cycles
+              + (Math.sin(p*400+0.5)*Math.cos(q*380+1.1)) * 12;
 
             // Colony centre — flatten but leave slight imperfection
             const colonyCenterDist = Math.sqrt((u-0.5)**2+(v-0.5)**2);
@@ -2982,8 +2987,8 @@ function generateMoon() {
             if (mdist < mimicMtnR*1.6) {
                 const t = Math.max(0, 1 - mdist/mimicMtnR);
                 const ts = t*t*(3-2*t);
-                const jagged = Math.sin(wx*f2*4.1+2.1)*Math.cos(wz*f2*3.7+1.3)*180
-                             + Math.sin(wx*f3*5.3+0.7)*Math.cos(wz*f3*4.9+1.8)*60;
+                const jagged = Math.sin(p*22+2.1)*Math.cos(q*19+1.3)*180
+                             + Math.sin(p*55+0.7)*Math.cos(q*48+1.8)*60;
                 h = h*(1-ts) + (mimicMtnH + jagged)*ts;
             }
 
@@ -3094,7 +3099,11 @@ const MOON_ENEMY_DEFS = {
 };
 
 function clearMoonEnemies() {
-    moonEnemies.forEach(e => { if (e.sprite) moonScene?.remove(e.sprite); });
+    moonEnemies.forEach(e => {
+        if (e.sprite) moonScene?.remove(e.sprite);
+        if (e.disguiseMesh) moonScene?.remove(e.disguiseMesh);
+        if (e.disguiseTag) e.disguiseTag.remove();
+    });
     moonEnemies = [];
 }
 
@@ -3182,30 +3191,32 @@ function updateMimic(e, dt, pdx, pdz, pdist, now) {
     );
 
     if (e.mode === 'mountain') {
-        // Stay on mountain, scan for players within range
         e.x = mimicMountainPos.x; e.z = mimicMountainPos.z;
         e.opacity = 1;
         if (pdist < 8000) {
-            // Choose this player as target — teleport behind them
             e.mode = 'stalk';
             e.stalkTimer = 20 + Math.random()*10;
-            // Teleport behind player
-            const ang = Math.atan2(pdz, pdx) + Math.PI; // opposite direction
-            const stalkDist = 1200 + Math.random()*600;
-            e.x = pos.x + Math.cos(ang)*stalkDist;
-            e.z = pos.z + Math.sin(ang)*stalkDist;
-            // Broadcast stalk start to all players
-            db.ref('cd_moon_mimic').set({ mode:'stalk', targetId: myId, x: e.x, z: e.z });
+            // Place behind player — opposite of their facing direction
+            const behindAng = yaw + Math.PI;
+            const stalkDist = 1400 + Math.random()*600;
+            e.x = pos.x + Math.sin(behindAng)*stalkDist;
+            e.z = pos.z + Math.cos(behindAng)*stalkDist;
+            db.ref('cd_moon_mimic').set({ mode:'stalk', targetId: myId, x: e.x, z: e.z, stalkEnd: Date.now() + e.stalkTimer*1000 });
         }
 
     } else if (e.mode === 'stalk') {
-        e.opacity = (mimicTarget === myId) ? 1 : 0.5; // half transparent for non-targets
-        // Slowly follow keeping distance
-        if (pdist > 1000) {
-            const len = pdist || 1;
-            e.x += (pdx/len)*e.def.speed*0.3*dt;
-            e.z += (pdz/len)*e.def.speed*0.3*dt;
+        e.opacity = (mimicTarget === myId) ? 1 : 0.5;
+        // Target a point BEHIND the player (not toward them)
+        const behindAng = yaw + Math.PI;
+        const targetX = pos.x + Math.sin(behindAng) * 900;
+        const targetZ = pos.z + Math.cos(behindAng) * 900;
+        const tdx = targetX - e.x, tdz = targetZ - e.z;
+        const tdist = Math.sqrt(tdx*tdx + tdz*tdz);
+        if (tdist > 120) {
+            e.x += (tdx/tdist) * SPEED * 0.5 * dt;
+            e.z += (tdz/tdist) * SPEED * 0.5 * dt;
         }
+        // Use server timestamp so all clients agree on when hunt starts
         e.stalkTimer -= dt;
         if (e.stalkTimer <= 0) {
             e.mode = 'hunt';
@@ -3214,33 +3225,86 @@ function updateMimic(e, dt, pdx, pdz, pdist, now) {
 
     } else if (e.mode === 'hunt') {
         e.opacity = 1;
+        const huntSpeed = SPEED * 1.1;
         const len = pdist || 1;
-        e.x += (pdx/len)*e.def.speed*dt;
-        e.z += (pdz/len)*e.def.speed*dt;
-        if (pdist < 80 && now - e.lastHit > 1500) {
+        e.x += (pdx/len) * huntSpeed * dt;
+        e.z += (pdz/len) * huntSpeed * dt;
+        if (pdist < 150 && now - e.lastHit > 1500) {
             e.lastHit = now;
-            dealMoonDmg(50, '💀 The Mimic got you!');
+            dealMoonDmg(40, '💀 The Mimic got you!');
             if (playerHP_moon <= 0) {
-                // Mimic becomes this player's disguise
                 e.mode = 'disguise';
                 e.disguiseColor = myColor;
-                db.ref('cd_moon_mimic').set({ mode:'disguise', color: myColor, x: e.x, z: e.z });
+                e.disguiseName = myName;
+                // Hide sprite, show player mesh disguise
+                if (e.sprite) e.sprite.visible = false;
+                buildMimicDisguise(e, myColor, myName);
+                db.ref('cd_moon_mimic').set({ mode:'disguise', color: myColor, name: myName, x: e.x, z: e.z });
             }
         }
 
     } else if (e.mode === 'disguise') {
         e.opacity = 1;
-        // Wander toward nearest player
         if (pdist > 200) {
             const len = pdist || 1;
-            e.x += (pdx/len)*e.def.speed*0.9*dt;
-            e.z += (pdz/len)*e.def.speed*0.9*dt;
+            e.x += (pdx/len) * SPEED * 0.9 * dt;
+            e.z += (pdz/len) * SPEED * 0.9 * dt;
         }
-        if (pdist < 80 && now - e.lastHit > 2000) {
+        // Update disguise mesh + nametag position
+        if (e.disguiseMesh) {
+            e.disguiseMesh.position.set(e.x, getMoonTerrainY(e.x,e.z), e.z);
+        }
+        if (e.disguiseTag && activeCamera) {
+            const wp = new THREE.Vector3(e.x, getMoonTerrainY(e.x,e.z)+75, e.z);
+            const prj = wp.clone().project(activeCamera);
+            const sx = (prj.x*0.5+0.5)*wrap.clientWidth;
+            const sy = (-prj.y*0.5+0.5)*wrap.clientHeight;
+            if (prj.z > 1 || sx<0||sx>wrap.clientWidth||sy<0||sy>wrap.clientHeight) {
+                e.disguiseTag.style.display='none';
+            } else {
+                e.disguiseTag.style.display='block';
+                e.disguiseTag.style.left=sx+'px';
+                e.disguiseTag.style.top=(sy-8)+'px';
+            }
+        }
+        if (pdist < 150 && now - e.lastHit > 2000) {
             e.lastHit = now;
-            dealMoonDmg(20, '😈 The Mimic (disguised) hit you!');
+            dealMoonDmg(20, '😈 Something is wrong with that player...');
         }
     }
+}
+
+// Build a player-shaped mesh as the mimic disguise
+function buildMimicDisguise(e, color, name) {
+    if (e.disguiseMesh) { moonScene.remove(e.disguiseMesh); e.disguiseMesh = null; }
+    if (e.disguiseTag)  { e.disguiseTag.remove(); e.disguiseTag = null; }
+
+    const hexColor = new THREE.Color(color).getHex();
+    const mesh = makeSquareMesh(hexColor);
+
+    // Add a creepy half-circle smile using a torus arc
+    const smileMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+    const smileGeo = new THREE.TorusGeometry(5, 1.2, 4, 8, Math.PI);
+    const smile = new THREE.Mesh(smileGeo, smileMat);
+    smile.position.set(0, 40, -11); // on face
+    smile.rotation.z = Math.PI; // arc faces down = smile
+    mesh.add(smile);
+
+    mesh.position.set(e.x, getMoonTerrainY(e.x, e.z), e.z);
+    moonScene.add(mesh);
+    e.disguiseMesh = mesh;
+
+    // Nametag
+    const tag = document.createElement('div');
+    tag.style.cssText = `position:fixed;pointer-events:none;z-index:40;
+        background:rgba(15,15,26,0.85);border:1px solid var(--primary);
+        color:#a29bfe;font-size:10px;font-weight:600;
+        padding:2px 7px;border-radius:4px;
+        transform:translateX(-50%);white-space:nowrap;
+        font-family:'Courier New',monospace;`;
+    tag.innerText = name;
+    document.body.appendChild(tag);
+    e.disguiseTag = tag;
 }
 
 function applyMimicState(data) {
@@ -3251,13 +3315,23 @@ function applyMimicState(data) {
     mimic.mode = data.mode;
     if (data.x !== undefined) { mimic.x = data.x; mimic.z = data.z; }
     if (data.mode === 'stalk') {
-        mimic.stalkTimer = 20 + Math.random()*10;
+        // Use server timestamp so timer is authoritative across clients
+        mimic.stalkEnd = data.stalkEnd || (Date.now() + 25000);
+        mimic.stalkTimer = (mimic.stalkEnd - Date.now()) / 1000;
         mimic.opacity = (mimicTarget === myId) ? 1 : 0.5;
+        if (mimic.sprite) mimic.sprite.visible = true;
+        if (mimic.disguiseMesh) { moonScene.remove(mimic.disguiseMesh); mimic.disguiseMesh = null; }
+        if (mimic.disguiseTag)  { mimic.disguiseTag.remove(); mimic.disguiseTag = null; }
+    }
+    if (data.mode === 'hunt') {
+        mimic.opacity = 1;
+        if (mimic.sprite) mimic.sprite.visible = true;
     }
     if (data.mode === 'disguise' && data.color) {
         mimic.disguiseColor = data.color;
-        // Tint sprite to player colour
-        if (mimic.sprite) mimic.sprite.material.color.set(data.color);
+        mimic.disguiseName  = data.name || '???';
+        if (mimic.sprite) mimic.sprite.visible = false;
+        buildMimicDisguise(mimic, data.color, data.name || '???');
     }
 }
 
