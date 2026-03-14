@@ -222,6 +222,32 @@
 <button id="gen-btn" onclick="generateGrasslands()">🌿 Generate All</button>
 <div id="pet-notif"></div>
 
+<!-- HP bar -->
+<div id="hp-bar" style="
+    position:fixed; top:44px; right:14px; z-index:60; display:none;
+    background:rgba(15,15,26,0.9); border:1px solid var(--primary);
+    border-radius:6px; padding:5px 10px; font-size:11px; min-width:120px;">
+    ❤️ <span id="hp-val">100</span>/100
+    <div style="width:100px;height:6px;background:#222;border-radius:3px;margin-top:3px;overflow:hidden;">
+        <div id="hp-fill" style="height:100%;width:100%;background:var(--primary);border-radius:3px;transition:width .3s,background .3s;"></div>
+    </div>
+</div>
+
+<!-- Basement screen effects -->
+<div id="bsmt-flicker" style="position:fixed;inset:0;background:#000;pointer-events:none;z-index:800;display:none;opacity:0;"></div>
+<div id="bsmt-rotate-wrap" style="position:fixed;inset:0;pointer-events:none;z-index:5;display:none;"></div>
+<div id="bsmt-msg" style="
+    position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    font-size:18px;color:white;pointer-events:none;z-index:900;
+    display:none;text-align:center;letter-spacing:0.1em;
+    text-shadow:0 0 10px rgba(255,255,255,0.8);
+    font-family:'Courier New',monospace;"></div>
+<div id="bsmt-interact" style="
+    position:fixed;bottom:60px;left:50%;transform:translateX(-50%);
+    font-size:11px;color:#a29bfe;background:rgba(15,15,26,0.9);
+    border:1px solid var(--primary);padding:4px 14px;border-radius:6px;
+    pointer-events:none;z-index:60;display:none;"></div>
+
 <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-database-compat.js"></script>
 
@@ -464,9 +490,9 @@ function makeSquareMesh(hexColor) {
 // ════════════════════════════════════════════════
 let hubScene, hubCamera;
 const PORTALS = [
-    { id: 'grasslands', label: '🌿 Grasslands',  color: 0x2ed573, angle: 0,              locked: false },
-    { id: 'dim2',       label: '🔒 ???',          color: 0x555566, angle: Math.PI*2/3,    locked: true  },
-    { id: 'dim3',       label: '🔒 ???',          color: 0x555566, angle: Math.PI*4/3,    locked: true  },
+    { id: 'grasslands', label: '🌿 Grasslands',       color: 0x2ed573, angle: 0,           locked: false },
+    { id: 'basement',   label: '🔦 Abandoned Basement',color: 0xaa6600, angle: Math.PI*2/3, locked: false },
+    { id: 'dim3',       label: '🔒 ???',               color: 0x555566, angle: Math.PI*4/3, locked: true  },
 ];
 const PORTAL_DIST = 220;
 const ENTER_DIST  = 90;
@@ -1188,6 +1214,7 @@ function checkPortals() {
                 if (keys['KeyE']) {
                     keys['KeyE'] = false;
                     if (nearest.data.id === 'grasslands') enterGrasslands();
+                    else if (nearest.data.id === 'basement') enterBasement();
                 }
             }
         } else {
@@ -1205,6 +1232,8 @@ function checkPortals() {
         } else {
             prompt.style.display = 'none';
         }
+    } else if (currentDim === 'basement') {
+        checkBasementDoors();
     }
 }
 
@@ -1232,6 +1261,9 @@ function update(dt) {
         const hr = Math.sqrt(newX*newX + newZ*newZ);
         if (hr < HUB_R - 10) { pos.x = newX; pos.z = newZ; }
         pos.y = 0;
+    } else if (currentDim === 'basement') {
+        // Basement — free movement, wall collision handled per-room
+        pos.x = newX; pos.z = newZ; pos.y = 0;
     } else {
         // Grasslands — clamp to terrain bounds
         newX = Math.max(-G_SIZE + 50, Math.min(G_SIZE - 50, newX));
@@ -1282,6 +1314,7 @@ function update(dt) {
 
     updateNameTags();
     updateEnemies(dt);
+    if (currentDim === 'basement') updateBasement(dt);
 
     // Animate hub portal glow
     if (currentDim === 'hub' && hubPortalMeshes) {
@@ -1330,9 +1363,1073 @@ function updateNameTags() {
     }
 }
 
-// ════════════════════════════════════════════════
-// LOOP
-// ════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════════════════
+// DIMENSION 2 — ABANDONED BASEMENT
+// ════════════════════════════════════════════════════════════════════
+
+// ── Constants ──────────────────────────────────────────────────────
+const ROOM_W  = 400;   // room width/depth (world units)
+const ROOM_H  = 180;   // ceiling height
+const WALL_T  = 12;    // wall thickness
+const DOOR_W  = 80;    // doorway width
+const DOOR_H  = 130;   // doorway height
+const BSMT_SPEED = 320;
+
+// Room type enum strings (never shown to player)
+const RTYPES = ['meeting','darkplace','plain','generator','carousel',
+                'starting','falsemeeting','checkerboard','toilet',
+                'buddyspace','playroom','void','hostile'];
+
+// ── State ───────────────────────────────────────────────────────────
+let bsmtScene = null, bsmtCamera = null;
+let bsmtRooms = {};          // key "x,z" → room object
+let bsmtMeshes = {};         // key "x,z" → THREE.Group
+let generatorExists = false;
+let bsmtEnemies = [];
+let bsmtSprites = [];
+let falseBuddy   = null;
+let lightsOn     = true;
+let lightGuides  = [];
+let playerHP     = 100;
+const MAX_HP     = 100;
+let lastDmgTime  = 0;
+// per-room timers/state
+let sittingChair    = null;  // { roomKey, chair:0|1, startTime }
+let meetingInvited  = false;
+let carouselAngle   = 0;
+let toiletClicks    = 0;
+let checkerTimer    = 0;
+let checkerActive   = false;
+let carouselInRoom  = false;
+let bsmtInteract    = null;  // current interactable near player
+
+const CHECKER_MSGS = [
+    'Why are you still here?',
+    'Leave.',
+    "Don't you know? It's disrespectful to stare.",
+    'Get out, now.',
+    'This is not a resting place.',
+    'You are not safe here. Leave.'
+];
+
+// ── Raycaster for basement interactions ────────────────────────────
+const bRay  = new THREE.Raycaster();
+const bMouse = new THREE.Vector2(0,0);
+
+// ── Material helpers ───────────────────────────────────────────────
+function bMat(color, emissive=0, ei=0) {
+    return new THREE.MeshLambertMaterial({ color, emissive, emissiveIntensity: ei });
+}
+function bRustyMat(tint=0) {
+    // Slightly randomised rust colour
+    const base = 0x5a3820;
+    return new THREE.MeshLambertMaterial({ color: tint||base });
+}
+
+// ── Enter / exit ───────────────────────────────────────────────────
+function enterBasement() {
+    currentDim = 'basement';
+    document.getElementById('dim-label').innerText = '🔦 Basement';
+    document.getElementById('gen-btn').style.display = myName === 'bartelsfamily5' ? 'block' : 'none';
+    document.getElementById('gen-btn').innerText = '💡 Generate Basement';
+    document.getElementById('gen-btn').onclick = generateBasement;
+    document.getElementById('hp-bar').style.display = 'block';
+    clearEnemies();
+
+    if (!bsmtScene) buildBsmtScene();
+    activeScene  = bsmtScene;
+    activeCamera = bsmtCamera;
+
+    pos.x = 0; pos.y = 0; pos.z = 0;
+    bsmtCamera.position.set(0, EYE_H * 0.6, 0);
+
+    // Load rooms from Firebase
+    db.ref('cd_basement_rooms').once('value', snap => {
+        if (snap.exists()) {
+            const data = snap.val();
+            generatorExists = data.generatorExists || false;
+            Object.entries(data.rooms || {}).forEach(([k,v]) => {
+                bsmtRooms[k] = v;
+                buildRoomMesh(k, v);
+            });
+        } else {
+            // First time — just create starting room
+            const startRoom = makeRoom('starting', 0, 0);
+            bsmtRooms['0,0'] = startRoom;
+            buildRoomMesh('0,0', startRoom);
+        }
+    });
+
+    db.ref('cd_basement_lights').on('value', snap => {
+        lightsOn = snap.val() !== false;
+        applyLightState();
+    });
+    db.ref('cd_basement_falseBuddy').on('value', snap => {
+        if (!snap.exists()) { falseBuddy = null; return; }
+        falseBuddy = snap.val();
+    });
+
+    updateHPUI();
+}
+
+function exitBasement() {
+    document.getElementById('hp-bar').style.display = 'none';
+    document.getElementById('bsmt-flicker').style.display = 'none';
+    document.getElementById('bsmt-msg').style.display = 'none';
+    document.getElementById('bsmt-interact').style.display = 'none';
+    clearCarouselEffect();
+    db.ref('cd_basement_lights').off();
+    db.ref('cd_basement_falseBuddy').off();
+    bsmtEnemies.forEach(e => { if(e.sprite) bsmtScene?.remove(e.sprite); });
+    bsmtEnemies = [];
+    lightGuides.forEach(g => bsmtScene?.remove(g.mesh));
+    lightGuides = [];
+    enterHub();
+}
+
+function buildBsmtScene() {
+    bsmtScene  = new THREE.Scene();
+    bsmtScene.background = new THREE.Color(0x050508);
+    bsmtScene.fog = new THREE.FogExp2(0x050508, 0.0018);
+    bsmtCamera = makeCamera();
+    bsmtCamera.fov = 70;
+    bsmtCamera.updateProjectionMatrix();
+}
+
+// ── Room definition ─────────────────────────────────────────────────
+function makeRoom(type, gx, gz) {
+    // gx/gz = grid coordinates (each step = ROOM_W)
+    return {
+        type,
+        gx, gz,
+        doors: { N: false, S: false, E: false, W: false }, // connected doors
+        objects: [],
+    };
+}
+
+// ── Room mesh construction ───────────────────────────────────────────
+const MAT_RUST   = new THREE.MeshLambertMaterial({ color: 0x4a2e1a });
+const MAT_FLOOR  = new THREE.MeshLambertMaterial({ color: 0x2a1a0e });
+const MAT_CEIL   = new THREE.MeshLambertMaterial({ color: 0x1a1008 });
+const MAT_DOOR   = new THREE.MeshLambertMaterial({ color: 0x0a0a0a, transparent:true, opacity:0 }); // invisible gap
+
+const WALL_MATS = {
+    plain:         () => new THREE.MeshLambertMaterial({ color: 0x4a2e1a }),
+    meeting:       () => new THREE.MeshLambertMaterial({ color: 0x3a2010 }),
+    darkplace:     () => new THREE.MeshLambertMaterial({ color: 0x0a0805 }),
+    generator:     () => new THREE.MeshLambertMaterial({ color: 0x2a2010 }),
+    carousel:      () => new THREE.MeshLambertMaterial({ color: 0x8a3060, emissive:0x3a1030, emissiveIntensity:0.2 }),
+    starting:      () => new THREE.MeshLambertMaterial({ color: 0x4a2e1a }),
+    falsemeeting:  () => new THREE.MeshLambertMaterial({ color: 0x2a0a0a }),
+    checkerboard:  () => null, // special
+    toilet:        () => new THREE.MeshLambertMaterial({ color: 0x4a3a2a }),
+    buddyspace:    () => new THREE.MeshLambertMaterial({ color: 0x1a4a2a }),
+    playroom:      () => new THREE.MeshLambertMaterial({ color: 0x6a2a5a }),
+    void:          () => new THREE.MeshLambertMaterial({ color: 0xffffff }),
+    hostile:       () => new THREE.MeshLambertMaterial({ color: 0x3a1010 }),
+};
+
+function buildRoomMesh(key, room) {
+    if (bsmtMeshes[key]) return;
+    const grp  = new THREE.Group();
+    const wx   = room.gx * ROOM_W;
+    const wz   = room.gz * ROOM_W;
+    const W    = ROOM_W, H = ROOM_H, T = WALL_T;
+
+    const isBig = room.type === 'starting' || room.type === 'darkplace';
+    const scale = isBig ? 1.5 : 1.0;
+    const RW = W * scale, RH = H, RD = W * scale;
+
+    const wallMatFn = WALL_MATS[room.type] || WALL_MATS.plain;
+    const wallMat   = wallMatFn();
+
+    // Floor
+    const floorMat = room.type === 'buddyspace'
+        ? new THREE.MeshLambertMaterial({ color: 0x2a6a2a })
+        : MAT_FLOOR;
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(RW, RD), floorMat);
+    floor.rotation.x = -Math.PI/2; grp.add(floor);
+
+    // Ceiling
+    const ceil = new THREE.Mesh(new THREE.PlaneGeometry(RW, RD), MAT_CEIL);
+    ceil.rotation.x = Math.PI/2; ceil.position.y = RH; grp.add(ceil);
+
+    // Checkerboard special wall texture using canvas
+    let wMat = wallMat;
+    if (room.type === 'checkerboard') {
+        const c = document.createElement('canvas'); c.width = c.height = 256;
+        const ctx2 = c.getContext('2d');
+        for(let ci=0;ci<8;ci++) for(let cj=0;cj<8;cj++) {
+            ctx2.fillStyle = (ci+cj)%2===0 ? '#111' : '#333';
+            ctx2.fillRect(ci*32,cj*32,32,32);
+        }
+        const tex = new THREE.CanvasTexture(c);
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(2,1);
+        wMat = new THREE.MeshLambertMaterial({ map: tex });
+    }
+    if (room.type === 'void') {
+        wMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    }
+
+    // Walls with door gaps
+    const DIRS = [
+        { dir:'N', axis:'z', side:-1, rot:0        },
+        { dir:'S', axis:'z', side: 1, rot:Math.PI  },
+        { dir:'E', axis:'x', side: 1, rot:-Math.PI/2 },
+        { dir:'W', axis:'x', side:-1, rot: Math.PI/2 },
+    ];
+    DIRS.forEach(d => {
+        const hasDoor = room.doors[d.dir];
+        const wallW   = d.axis==='z' ? RW : RD;
+        if (hasDoor) {
+            // Two wall segments left/right of door, one above door
+            const sideW = (wallW - DOOR_W) / 2;
+            // Left slab
+            const l = new THREE.Mesh(new THREE.BoxGeometry(sideW, RH, T), wMat);
+            l.position.set(-wallW/2 + sideW/2, RH/2, 0);
+            // Right slab
+            const r = new THREE.Mesh(new THREE.BoxGeometry(sideW, RH, T), wMat);
+            r.position.set( wallW/2 - sideW/2, RH/2, 0);
+            // Top slab above door
+            const topH = RH - DOOR_H;
+            const top  = new THREE.Mesh(new THREE.BoxGeometry(DOOR_W, topH, T), wMat);
+            top.position.set(0, DOOR_H + topH/2, 0);
+            const wallGrp = new THREE.Group();
+            wallGrp.add(l, r, top);
+            wallGrp.rotation.y = d.rot;
+            wallGrp.position.set(
+                d.axis==='x' ? (RW/2 * d.side) : 0,
+                0,
+                d.axis==='z' ? (RD/2 * d.side) : 0
+            );
+            grp.add(wallGrp);
+        } else {
+            const wall = new THREE.Mesh(new THREE.BoxGeometry(wallW, RH, T), wMat);
+            wall.position.set(
+                d.axis==='x' ? (RW/2 * d.side) : 0,
+                RH/2,
+                d.axis==='z' ? (RD/2 * d.side) : 0
+            );
+            wall.rotation.y = d.rot;
+            grp.add(wall);
+        }
+    });
+
+    // Hanging lightbulb
+    addLightbulb(grp, 0, RH - 10, 0, room.type);
+
+    // Room-specific objects
+    addRoomObjects(grp, room, RW, RH, RD);
+
+    grp.position.set(wx, 0, wz);
+    bsmtScene.add(grp);
+    bsmtMeshes[key] = grp;
+
+    // Spawn room enemies
+    spawnRoomEnemies(room, wx, wz, RW, RD);
+}
+
+function addLightbulb(grp, x, y, z, roomType) {
+    // Cord
+    const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.5,15,4), new THREE.MeshBasicMaterial({color:0x222}));
+    cord.position.set(x, y+7, z); grp.add(cord);
+    // Bulb
+    const bulb = new THREE.Mesh(new THREE.SphereGeometry(6,8,8), new THREE.MeshBasicMaterial({color:0xffffaa}));
+    bulb.position.set(x, y, z);
+    bulb.userData.isBulb = true; bulb.userData.roomType = roomType;
+    grp.add(bulb);
+    // Light source
+    if (roomType !== 'darkplace') {
+        const pl = new THREE.PointLight(0xffeeaa, 1.8, ROOM_W * 0.9);
+        pl.position.set(x, y, z);
+        pl.userData.isRoomLight = true;
+        grp.add(pl);
+    }
+    // Generator room — permanent yellow glow regardless of power
+    if (roomType === 'generator') {
+        const gl = new THREE.PointLight(0xffcc00, 2.5, ROOM_W * 1.2);
+        gl.position.set(x, y-20, z);
+        gl.userData.generatorGlow = true;
+        grp.add(gl);
+    }
+}
+
+// ── Room objects ──────────────────────────────────────────────────────
+function addRoomObjects(grp, room, RW, RH, RD) {
+    const type = room.type;
+    const rng2 = seededRand((room.gx * 31 + room.gz * 17 + 99) % 9999);
+
+    // Objects that appear in ALL plain-type rooms
+    const hasObjects = ['plain','toilet','buddyspace','playroom','hostile','starting','carousel'].includes(type);
+    if (hasObjects) addObjects(grp, room, RW, RH, RD, rng2);
+
+    switch(type) {
+        case 'meeting': case 'falsemeeting': {
+            const numChairs = type==='meeting' ? 2 : 1;
+            // Table
+            const table = new THREE.Mesh(new THREE.BoxGeometry(80,8,40), bMat(0x5c3a1e));
+            table.position.set(0, 35, 0); grp.add(table);
+            table.userData.isTable = true;
+            // Chairs
+            for (let c=0; c<numChairs; c++) {
+                const side = c===0 ? -1 : 1;
+                const chair = makeChair(bMat(0x3a2010));
+                chair.position.set(side * 60, 0, 0);
+                chair.rotation.y = c===0 ? Math.PI/2 : -Math.PI/2;
+                chair.userData.isSittable = true;
+                chair.userData.chairIdx  = c;
+                chair.userData.roomKey   = `${room.gx},${room.gz}`;
+                grp.add(chair);
+            }
+            break;
+        }
+        case 'darkplace': {
+            // No objects, just darkness. Statues spawned in spawnRoomEnemies
+            break;
+        }
+        case 'generator': {
+            // Generator box
+            const gen = new THREE.Mesh(new THREE.BoxGeometry(60,80,40), bMat(0x888888,0xffcc00,0.15));
+            gen.position.set(0, 40, -RD/2 + 60);
+            gen.userData.isGenerator = true;
+            grp.add(gen);
+            // Switch
+            const sw = new THREE.Mesh(new THREE.BoxGeometry(12,20,8), bMat(0xdd3333));
+            sw.position.set(20, 70, -RD/2 + 42);
+            sw.userData.isSwitch = true;
+            grp.add(sw);
+            break;
+        }
+        case 'carousel': {
+            // Spinning colourful walls — handled in updateBasement via rotation
+            grp.userData.isCarousel = true;
+            break;
+        }
+        case 'toilet': {
+            const toilet = makeToilet();
+            toilet.position.set(0, 0, 0);
+            toilet.userData.isToilet = true;
+            grp.add(toilet);
+            break;
+        }
+        case 'buddyspace': {
+            // Mini trees
+            const treeCount = 1 + Math.floor(rng2() * 2);
+            for (let t=0; t<treeCount; t++) {
+                const tx = (rng2()-0.5)*RW*0.6, tz = (rng2()-0.5)*RD*0.6;
+                const mt = makeMiniTree();
+                mt.position.set(tx, 0, tz);
+                grp.add(mt);
+            }
+            break;
+        }
+        case 'playroom': {
+            addPlayEquipment(grp, RW, RH, RD);
+            break;
+        }
+        case 'hostile': {
+            addHazards(grp, room, RW, RH, RD, rng2);
+            break;
+        }
+        case 'starting': {
+            // Slightly more objects than plain
+            break;
+        }
+    }
+}
+
+function makeChair(mat) {
+    const g = new THREE.Group();
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(28,4,28), mat); seat.position.y=28; g.add(seat);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(28,36,4), mat);  back.position.set(0,48,-12); g.add(back);
+    for(let lx of [-10,10]) for(let lz of [-10,10]) {
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(2,2,28,4), mat);
+        leg.position.set(lx,14,lz); g.add(leg);
+    }
+    return g;
+}
+function makeToilet() {
+    const g = new THREE.Group();
+    const base = new THREE.Mesh(new THREE.BoxGeometry(30,30,40), bMat(0xeeeeee)); base.position.y=15; g.add(base);
+    const top  = new THREE.Mesh(new THREE.BoxGeometry(32,6,42),  bMat(0xdddddd)); top.position.y=33; g.add(top);
+    const tank = new THREE.Mesh(new THREE.BoxGeometry(28,34,14), bMat(0xeeeeee)); tank.position.set(0,32,-18); g.add(tank);
+    return g;
+}
+function makeMiniTree() {
+    const g = new THREE.Group();
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(2,3,20,5), bMat(0x5c3317));
+    trunk.position.y=10; g.add(trunk);
+    const foliage = new THREE.Mesh(new THREE.ConeGeometry(12,24,6), bMat(0x1e6b2e));
+    foliage.position.y=30; g.add(foliage);
+    return g;
+}
+function addPlayEquipment(grp, RW, RH, RD) {
+    // Monkey bars
+    const barMat = bMat(0x888888);
+    const bars   = new THREE.Group();
+    for(let i=0;i<6;i++) {
+        const b = new THREE.Mesh(new THREE.CylinderGeometry(2,2,60,6), barMat);
+        b.rotation.z = Math.PI/2; b.position.set(-75+i*30, 110, -RD/2+60);
+        bars.add(b);
+    }
+    const sideL = new THREE.Mesh(new THREE.CylinderGeometry(2,2,60,6), barMat);
+    sideL.position.set(-75, 80, -RD/2+60); bars.add(sideL);
+    const sideR = sideL.clone(); sideR.position.x = 75; bars.add(sideR);
+    bars.userData.isMonkeyBars = true;
+    grp.add(bars);
+
+    // Slide
+    const slide = new THREE.Mesh(new THREE.BoxGeometry(40,4,120), bMat(0xee4444));
+    slide.rotation.x = -Math.PI/6; slide.position.set(RW/2-60, 40, 0);
+    slide.userData.isSlide = true;
+    grp.add(slide);
+
+    // Hollow log
+    const log = new THREE.Mesh(new THREE.CylinderGeometry(18,18,80,10,1,true), bMat(0x5c3317));
+    log.rotation.z = Math.PI/2; log.position.set(-RW/2+80, 18, RD/2-80);
+    grp.add(log);
+
+    // Plastic tree
+    const ptree = new THREE.Group();
+    const ptrunk = new THREE.Mesh(new THREE.CylinderGeometry(5,5,60,8), bMat(0x228822));
+    ptrunk.position.y=30; ptree.add(ptrunk);
+    const pfoliage = new THREE.Mesh(new THREE.SphereGeometry(28,8,8), bMat(0x33cc33));
+    pfoliage.position.y=75; ptree.add(pfoliage);
+    ptree.position.set(RW/2-50, 0, -RD/2+50);
+    grp.add(ptree);
+}
+
+function addHazards(grp, room, RW, RH, RD, rng2) {
+    const allHazards = [
+        'acid_pipe','puddle','hot_pipe','toxic_puddle','stuck_door','bite_tongue','rust_tetanus'
+    ];
+    // Pick 3 random unique hazards
+    const picked = [];
+    while(picked.length < 3) {
+        const h = allHazards[Math.floor(rng2() * allHazards.length)];
+        if (!picked.includes(h)) picked.push(h);
+    }
+    picked.forEach((h, i) => {
+        const ox = (rng2()-0.5)*RW*0.6, oz = (rng2()-0.5)*RD*0.6;
+        let mesh;
+        if (h === 'acid_pipe' || h === 'hot_pipe') {
+            mesh = new THREE.Mesh(new THREE.CylinderGeometry(6,6,80,8), bMat(h==='acid_pipe'?0x33aa33:0xcc4400));
+            mesh.rotation.z = Math.PI/2; mesh.position.set(ox, 50, oz);
+        } else if (h === 'puddle' || h === 'toxic_puddle') {
+            mesh = new THREE.Mesh(new THREE.CylinderGeometry(20,20,2,12), bMat(h==='puddle'?0x334455:0x226622));
+            mesh.position.set(ox, 1, oz);
+        } else {
+            mesh = new THREE.Mesh(new THREE.BoxGeometry(10,10,10), bMat(0x884422));
+            mesh.position.set(ox, 5, oz);
+        }
+        mesh.userData.isHazard = true;
+        mesh.userData.hazardType = h;
+        mesh.userData.roomKey = `${room.gx},${room.gz}`;
+        grp.add(mesh);
+    });
+
+    // Pipes on walls as decoration
+    for(let p=0;p<4;p++) {
+        const pipe = new THREE.Mesh(new THREE.CylinderGeometry(4,4,RH*0.7,6), bMat(0x666666));
+        pipe.position.set((rng2()-0.5)*RW*0.7, RH*0.35, (rng2()-0.5)*RD*0.7);
+        grp.add(pipe);
+    }
+}
+
+function addObjects(grp, room, RW, RH, RD, rng2) {
+    const OBJECT_TYPES = ['teddy','soccerball','cube','watch','chair','pipe'];
+    // Check adjacency for paper warnings
+    const neighbors = getNeighborTypes(room.gx, room.gz);
+    const nearDark = neighbors.includes('darkplace');
+
+    const count = 2 + Math.floor(rng2() * 3);
+    for (let i=0; i<count; i++) {
+        const ot = OBJECT_TYPES[Math.floor(rng2()*OBJECT_TYPES.length)];
+        const ox = (rng2()-0.5)*RW*0.5, oz = (rng2()-0.5)*RD*0.5;
+        let mesh;
+        switch(ot) {
+            case 'teddy':
+                mesh = new THREE.Mesh(new THREE.SphereGeometry(12,8,8), bMat(0xcc9966)); mesh.position.set(ox,12,oz); break;
+            case 'soccerball':
+                mesh = new THREE.Mesh(new THREE.SphereGeometry(10,8,8), bMat(0xffffff)); mesh.position.set(ox,10,oz);
+                mesh.userData.isSoccerBall=true; break;
+            case 'cube':
+                const cols=[0xee3333,0xeeee33,0x3333ee];
+                mesh = new THREE.Mesh(new THREE.BoxGeometry(16,16,16),bMat(cols[Math.floor(rng2()*3)]));
+                mesh.position.set(ox,8,oz); break;
+            case 'watch':
+                mesh = new THREE.Mesh(new THREE.BoxGeometry(12,4,20),bMat(0x666666)); mesh.position.set(ox,40,oz);
+                mesh.userData.isWatch=true; break;
+            case 'chair':
+                mesh = makeChair(bMat(0x3a2010)); mesh.position.set(ox,0,oz);
+                mesh.userData.isSittable=true; mesh.userData.chairIdx=-1; break;
+            case 'pipe':
+                mesh = new THREE.Mesh(new THREE.CylinderGeometry(4,4,RH,6),bMat(0x666666));
+                mesh.position.set(ox,RH/2,oz); break;
+        }
+        if(mesh) { grp.add(mesh); }
+    }
+
+    // Paper near dark room
+    if (nearDark) {
+        const paper = new THREE.Mesh(new THREE.PlaneGeometry(24,32), bMat(0xeeeecc));
+        paper.position.set(-RW/2+8, 60, (rng2()-0.5)*RD*0.4);
+        paper.rotation.y = Math.PI/2;
+        paper.userData.isPaper1 = true;
+        grp.add(paper);
+    }
+    // Paper 2 — random
+    if (rng2() < 0.3) {
+        const p2 = new THREE.Mesh(new THREE.PlaneGeometry(24,32), bMat(0xffeedd));
+        p2.position.set(RW/2-8, 60, (rng2()-0.5)*RD*0.4);
+        p2.rotation.y = -Math.PI/2;
+        p2.userData.isPaper2 = true;
+        grp.add(p2);
+    }
+}
+
+function getNeighborTypes(gx, gz) {
+    const types = [];
+    [[gx,gz-1],[gx,gz+1],[gx-1,gz],[gx+1,gz]].forEach(([nx,nz]) => {
+        const r = bsmtRooms[`${nx},${nz}`];
+        if(r) types.push(r.type);
+    });
+    return types;
+}
+
+// ── Procedural room generation ────────────────────────────────────────
+function generateBasement() {
+    if (myName !== 'bartelsfamily5') return;
+    // Wipe existing
+    Object.keys(bsmtMeshes).forEach(k => { bsmtScene.remove(bsmtMeshes[k]); delete bsmtMeshes[k]; });
+    bsmtRooms = {}; generatorExists = false;
+
+    // Build a grid of rooms via BFS from 0,0
+    const queue = [{gx:0,gz:0,type:'starting'}];
+    const visited = new Set(['0,0']);
+    bsmtRooms['0,0'] = makeRoom('starting',0,0);
+
+    while(queue.length) {
+        const {gx,gz} = queue.shift();
+        const DIRS_GRID = [{dx:0,dz:-1,door:'N',opp:'S'},{dx:0,dz:1,door:'S',opp:'N'},{dx:1,dz:0,door:'E',opp:'W'},{dx:-1,dz:0,door:'W',opp:'E'}];
+        // Each room gets 1-4 doors, no two same types adjacent
+        const shuffled = DIRS_GRID.sort(()=>Math.random()-0.5);
+        const doorCount = bsmtRooms[`${gx},${gz}`].type==='starting'?4:1+Math.floor(Math.random()*3);
+        let added=0;
+        for (const d of shuffled) {
+            if (added >= doorCount) break;
+            const nk = `${gx+d.dx},${gz+d.dz}`;
+            if (visited.has(nk)) continue;
+            // Don't let two same types touch (except plain)
+            const neighborTypes = getNeighborTypesFromGrid(gx+d.dx, gz+d.dz);
+            let rtype = pickRoomType(neighborTypes);
+            visited.add(nk);
+            const nr = makeRoom(rtype, gx+d.dx, gz+d.dz);
+            bsmtRooms[nk] = nr;
+            // Connect doors
+            bsmtRooms[`${gx},${gz}`].doors[d.door] = true;
+            nr.doors[d.opp] = true;
+            if (visited.size < 40) queue.push({gx:gx+d.dx,gz:gz+d.dz});
+            added++;
+        }
+    }
+
+    // Build all meshes
+    Object.entries(bsmtRooms).forEach(([k,v]) => buildRoomMesh(k,v));
+
+    // Save to Firebase
+    db.ref('cd_basement_rooms').set({ rooms: bsmtRooms, generatorExists, generated: Date.now() });
+    db.ref('cd_basement_lights').set(true);
+    showPetNotif('🔦 Basement generated!');
+}
+
+function getNeighborTypesFromGrid(gx,gz) {
+    const types=[];
+    [[gx,gz-1],[gx,gz+1],[gx-1,gz],[gx+1,gz]].forEach(([nx,nz])=>{
+        const r=bsmtRooms[`${nx},${nz}`]; if(r) types.push(r.type);
+    });
+    return types;
+}
+
+function pickRoomType(neighborTypes) {
+    const pool = [...RTYPES];
+    // Remove types that are already adjacent (no 2 same touching, except plain)
+    const filteredPool = pool.filter(t => t==='plain' || !neighborTypes.includes(t));
+    // Generator: only 1 allowed, 1/75 chance
+    if (!generatorExists && Math.random() < 1/75) {
+        generatorExists = true;
+        return 'generator';
+    }
+    // No generator in pool if already exists
+    const finalPool = filteredPool.filter(t => t!=='generator');
+    if (finalPool.length === 0) return 'plain';
+    return finalPool[Math.floor(Math.random()*finalPool.length)];
+}
+
+// ── Check and generate rooms when player walks into doorways ─────────
+function checkBasementDoors() {
+    const prompt = document.getElementById('portal-prompt');
+    // Find which room player is in
+    const gx = Math.round(pos.x / ROOM_W);
+    const gz = Math.round(pos.z / ROOM_W);
+    const roomKey = `${gx},${gz}`;
+    const room = bsmtRooms[roomKey];
+    if (!room) { prompt.style.display='none'; return; }
+
+    const rx = gx * ROOM_W, rz = gz * ROOM_W;
+    const isBig = room.type==='starting'||room.type==='darkplace';
+    const half = ROOM_W * (isBig?1.5:1)/2;
+
+    // Check if near a door gap → generate neighbor room
+    const DIRS_GRID = [{dx:0,dz:-1,door:'N',opp:'S'},{dx:0,dz:1,door:'S',opp:'N'},{dx:1,dz:0,door:'E',opp:'W'},{dx:-1,dz:0,door:'W',opp:'E'}];
+    DIRS_GRID.forEach(d => {
+        if (!room.doors[d.door]) return;
+        const nk = `${gx+d.dx},${gz+d.dz}`;
+        if (!bsmtRooms[nk]) {
+            // Generate new room on the fly
+            const neighborTypes = getNeighborTypes(gx+d.dx, gz+d.dz);
+            const rtype = pickRoomType(neighborTypes);
+            const nr = makeRoom(rtype, gx+d.dx, gz+d.dz);
+            nr.doors[d.opp] = true;
+            bsmtRooms[nk] = nr;
+            buildRoomMesh(nk, nr);
+            db.ref(`cd_basement_rooms/rooms/${nk.replace(',','_')}`).set(nr);
+        }
+    });
+
+    // Return to hub prompt near entry door (south edge of starting room)
+    const distToStart = Math.sqrt(pos.x*pos.x + pos.z*pos.z);
+    if (gx===0&&gz===0 && pos.z > half-60) {
+        prompt.innerText='[ E ] Return to Hub'; prompt.style.display='block';
+        if(keys['KeyE']){keys['KeyE']=false; exitBasement();}
+    } else {
+        prompt.style.display='none';
+    }
+
+    // Chair interaction
+    checkChairInteraction(room, rx, rz);
+    checkObjectInteraction(room, rx, rz);
+}
+
+// ── Chair sitting ──────────────────────────────────────────────────────
+function checkChairInteraction(room, rx, rz) {
+    const interact = document.getElementById('bsmt-interact');
+    if(room.type!=='meeting'&&room.type!=='falsemeeting'&&room.type!=='plain'&&room.type!=='hostile') { interact.style.display='none'; return; }
+
+    // Check if player is near a sittable object
+    const grp = bsmtMeshes[`${room.gx},${room.gz}`];
+    if(!grp) return;
+
+    let nearChair = null;
+    grp.traverse(obj => {
+        if(!obj.userData.isSittable) return;
+        const wp = new THREE.Vector3();
+        obj.getWorldPosition(wp);
+        const d = Math.sqrt((wp.x-pos.x)**2+(wp.z-pos.z)**2);
+        if(d < 60) nearChair = obj;
+    });
+
+    if(nearChair) {
+        interact.innerText='[ E ] Sit down'; interact.style.display='block';
+        if(keys['KeyE']) {
+            keys['KeyE']=false;
+            startSitting(nearChair, room);
+        }
+    } else {
+        if(sittingChair) stopSitting();
+        interact.style.display='none';
+    }
+}
+
+let sittingInterval = null;
+function startSitting(chairObj, room) {
+    if(sittingChair) return;
+    sittingChair = { obj: chairObj, room, time: Date.now() };
+    const interact = document.getElementById('bsmt-interact');
+    interact.innerText='[ E ] Stand up';
+
+    if(room.type==='falsemeeting' && chairObj.userData.chairIdx === 0) {
+        // Awaken False Buddy after 3s
+        setTimeout(()=>{
+            if(!sittingChair) return;
+            showBsmtMsg('Something feels wrong...');
+            setTimeout(()=>{
+                if(!sittingChair) return;
+                showBsmtMsg('');
+                spawnFalseBuddy(room.gx*ROOM_W, room.gz*ROOM_W);
+            }, 2000);
+        }, 3000);
+    }
+
+    if(room.type==='meeting') {
+        sittingInterval = setInterval(()=>{
+            if(!sittingChair) { clearInterval(sittingInterval); return; }
+            const elapsed = (Date.now()-sittingChair.time)/1000;
+            if(elapsed > 20) {
+                showBsmtMsg('He has arrived. Leave immediately.');
+                setTimeout(()=>showBsmtMsg(''), 4000);
+                clearInterval(sittingInterval);
+                sittingChair = null;
+            }
+        }, 1000);
+    }
+
+    // Stand back up on E
+    keys['KeyE'] = false;
+}
+function stopSitting() {
+    sittingChair = null;
+    clearInterval(sittingInterval);
+    document.getElementById('bsmt-interact').style.display='none';
+}
+
+// ── Object interactions ────────────────────────────────────────────────
+function checkObjectInteraction(room, rx, rz) {
+    const grp = bsmtMeshes[`${room.gx},${room.gz}`];
+    if(!grp) return;
+
+    bRay.setFromCamera(bMouse, bsmtCamera);
+    const objects = [];
+    grp.traverse(obj=>{ if(obj.isMesh) objects.push(obj); });
+    const hits = bRay.intersectObjects(objects);
+    if(!hits.length) { bsmtInteract=null; return; }
+    const hit = hits[0].object;
+
+    if(hit.userData.isToilet) {
+        document.getElementById('bsmt-interact').innerText='[ E ] Flush'; document.getElementById('bsmt-interact').style.display='block';
+        if(keys['KeyE']) {
+            keys['KeyE']=false; toiletClicks++;
+            if(toiletClicks <= 10)        showBsmtMsg("It's a toilet.");
+            else if(toiletClicks <= 50)   showBsmtMsg("It's still a toilet.");
+            else if(toiletClicks <= 100)  showBsmtMsg("You don't get anything from clicking on this toilet.");
+            else { toiletClicks=0; showBsmtMsg("It's a toilet."); }
+            setTimeout(()=>showBsmtMsg(''),2000);
+        }
+    } else if(hit.userData.isGenerator || hit.userData.isSwitch) {
+        document.getElementById('bsmt-interact').innerText='[ E ] Toggle Power'; document.getElementById('bsmt-interact').style.display='block';
+        if(keys['KeyE']) {
+            keys['KeyE']=false;
+            db.ref('cd_basement_lights').set(!lightsOn);
+        }
+    } else if(hit.userData.isSoccerBall) {
+        document.getElementById('bsmt-interact').innerText='[ E ] Kick'; document.getElementById('bsmt-interact').style.display='block';
+        if(keys['KeyE']) { keys['KeyE']=false; showBsmtMsg('Made of concrete.'); setTimeout(()=>showBsmtMsg(''),2000); }
+    } else if(hit.userData.isSlide) {
+        document.getElementById('bsmt-interact').innerText='[ E ] Slide!'; document.getElementById('bsmt-interact').style.display='block';
+        if(keys['KeyE']) { keys['KeyE']=false; showBsmtMsg('Wheee!'); setTimeout(()=>showBsmtMsg(''),1500); }
+    } else if(hit.userData.isPaper1) {
+        document.getElementById('bsmt-interact').innerText='[ E ] Read'; document.getElementById('bsmt-interact').style.display='block';
+        if(keys['KeyE']) { keys['KeyE']=false; showBsmtMsg("DON'T TURN OFF THE LIGHTS"); setTimeout(()=>showBsmtMsg(''),3000); }
+    } else if(hit.userData.isPaper2) {
+        document.getElementById('bsmt-interact').innerText='[ E ] Read'; document.getElementById('bsmt-interact').style.display='block';
+        if(keys['KeyE']) { keys['KeyE']=false; showBsmtMsg('Come Visit The Play Room!'); setTimeout(()=>showBsmtMsg(''),2500); }
+    } else if(hit.userData.isWatch) {
+        document.getElementById('bsmt-interact').innerText='[ E ] Check time'; document.getElementById('bsmt-interact').style.display='block';
+        if(keys['KeyE']) {
+            keys['KeyE']=false;
+            const now2=new Date();
+            const est = now2.toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+            showBsmtMsg(est); setTimeout(()=>showBsmtMsg(''),3000);
+        }
+    } else if(hit.userData.isHazard) {
+        triggerHazard(hit.userData.hazardType);
+    } else {
+        document.getElementById('bsmt-interact').style.display='none';
+    }
+}
+
+// ── Hazards ────────────────────────────────────────────────────────────
+const HAZARD_DEBUFFS = {};
+function triggerHazard(type) {
+    const now2=Date.now();
+    if(now2-lastDmgTime<1500) return;
+    lastDmgTime=now2;
+    let dmg=0, msg='';
+    switch(type){
+        case 'acid_pipe':     dmg=30; msg='💚 Acid burns you!'; break;
+        case 'puddle':        dmg=20; msg='💧 You slipped!'; break;
+        case 'hot_pipe':      dmg=15; msg='🔥 You burned your hand!'; break;
+        case 'toxic_puddle':  dmg=30; msg='☣️ Toxic waste!'; break;
+        case 'stuck_door':    dmg=10; msg='🚪 Your hand got stuck in the door!'; break;
+        case 'bite_tongue':   dmg=5;  msg='😬 You bit your tongue slipping!'; break;
+        case 'rust_tetanus':
+            dmg=0; msg='🩹 The rust gave you tetanus!';
+            if(!HAZARD_DEBUFFS.tetanus){
+                HAZARD_DEBUFFS.tetanus=true;
+                let ticks=0;
+                const iv=setInterval(()=>{
+                    ticks++;
+                    dealDmg(20/30);
+                    if(ticks>=30){clearInterval(iv);HAZARD_DEBUFFS.tetanus=false;}
+                },1000);
+            }
+            break;
+    }
+    if(dmg>0) dealDmg(dmg);
+    showBsmtMsg(msg); setTimeout(()=>showBsmtMsg(''),2000);
+}
+
+function dealDmg(amount) {
+    playerHP = Math.max(0, playerHP - amount);
+    updateHPUI();
+    const flash = document.createElement('div');
+    flash.style.cssText='position:fixed;inset:0;background:rgba(235,77,75,0.3);pointer-events:none;z-index:9000;';
+    document.body.appendChild(flash); setTimeout(()=>flash.remove(),180);
+    if(playerHP<=0) { showBsmtMsg('You died... returning to Hub.'); setTimeout(()=>{ playerHP=MAX_HP; exitBasement(); },2500); }
+}
+
+function updateHPUI() {
+    document.getElementById('hp-val').innerText = Math.ceil(playerHP);
+    const pct = playerHP/MAX_HP*100;
+    const fill=document.getElementById('hp-fill');
+    fill.style.width=pct+'%';
+    fill.style.background=pct>60?'var(--primary)':pct>30?'#f39c12':'#eb4d4b';
+}
+
+// ── Light state ─────────────────────────────────────────────────────────
+function applyLightState() {
+    if(!bsmtScene) return;
+    bsmtScene.traverse(obj => {
+        if(obj.isLight && obj.userData.isRoomLight) {
+            obj.intensity = lightsOn ? 1.8 : 0;
+        }
+    });
+    if(!lightsOn) spawnLightGuides();
+    else clearLightGuides();
+}
+function spawnLightGuides() {
+    clearLightGuides();
+    for(let i=0;i<3;i++) {
+        getSpriteTexture('lightguide', {img:'enemies/lightguide.png'}, tex=>{
+            const mat = new THREE.SpriteMaterial({map:tex,transparent:true,depthTest:true,depthWrite:false});
+            const sp = new THREE.Sprite(mat);
+            sp.scale.set(20,20,1);
+            // Start near player
+            sp.position.set(pos.x+(Math.random()-0.5)*60, 40, pos.z+(Math.random()-0.5)*60);
+            sp.userData.isLightGuide=true;
+            bsmtScene.add(sp);
+            lightGuides.push({ mesh:sp, offset:{x:(i-1)*30,z:0} });
+            // Give off glow
+            const gl=new THREE.PointLight(0x8888ff,1.5,120);
+            gl.position.copy(sp.position);
+            sp.add(gl);
+        });
+    }
+}
+function clearLightGuides() {
+    lightGuides.forEach(g=>bsmtScene?.remove(g.mesh));
+    lightGuides=[];
+}
+
+// ── Enemies ──────────────────────────────────────────────────────────
+function spawnRoomEnemies(room, wx, wz, RW, RD) {
+    const rng3 = seededRand((room.gx*53+room.gz*37+7)%9999);
+    if(room.type==='darkplace') {
+        const count=1+Math.floor(rng3()*2); // 1 or 2 statues
+        for(let i=0;i<count;i++) {
+            const ex=wx+(rng3()-0.5)*RW*0.5, ez=wz+(rng3()-0.5)*RD*0.5;
+            spawnBsmtEnemy('statue',ex,0,ez,room);
+        }
+    }
+    if(room.type==='buddyspace'||room.type==='plain') {
+        const count=1+Math.floor(rng3()*3);
+        for(let i=0;i<count;i++){
+            const ex=wx+(rng3()-0.5)*RW*0.4, ez=wz+(rng3()-0.5)*RD*0.4;
+            spawnBsmtEnemy('buddy',ex,0,ez,room);
+        }
+    }
+    if(['plain','playroom','carousel'].includes(room.type) && rng3()<0.4) {
+        const ex=wx+(rng3()-0.5)*RW*0.4, ez=wz+(rng3()-0.5)*RD*0.4;
+        spawnBsmtEnemy('spider',ex,0,ez,room);
+    }
+}
+
+const BSMT_ENEMY_DEFS = {
+    statue:     {img:'enemies/statue.png',    speed:BSMT_SPEED*2, size:70, dmg:40},
+    buddy:      {img:'enemies/buddy.png',     speed:BSMT_SPEED*0.5, size:50, dmg:0},
+    spider:     {img:'enemies/giantspider.png',speed:0, size:40, dmg:0},
+    falseBuddy: {img:'enemies/notbuddy.png',  speed:BSMT_SPEED*1.2, size:80, dmg:30},
+};
+
+function spawnBsmtEnemy(type, wx, wy, wz, room) {
+    const def = BSMT_ENEMY_DEFS[type];
+    if(!def) return;
+    const enemy = {type, def, x:wx, y:wy, z:wz, room,
+        vx:(Math.random()-0.5)*def.speed*0.3, vz:(Math.random()-0.5)*def.speed*0.3,
+        sprite:null, lastHit:0};
+    getSpriteTexture(type, def, tex=>{
+        const mat=new THREE.SpriteMaterial({map:tex,transparent:true,depthTest:true,depthWrite:false,sizeAttenuation:true});
+        const sp=new THREE.Sprite(mat);
+        sp.scale.set(def.size,def.size,1);
+        sp.position.set(wx,wy+def.size*0.5,wz);
+        sp.userData.enemyType=type;
+        sp.userData.clickable=true;
+        bsmtScene.add(sp);
+        enemy.sprite=sp;
+    });
+    bsmtEnemies.push(enemy);
+    return enemy;
+}
+
+function spawnFalseBuddy(wx, wz) {
+    const fb = spawnBsmtEnemy('falseBuddy', wx, 0, wz, null);
+    db.ref('cd_basement_falseBuddy').set({x:wx,z:wz,spawner:myName,time:Date.now()});
+}
+
+// ── Dark Room flicker ──────────────────────────────────────────────────
+let flickerTimeout = null;
+function startDarkRoomFlicker() {
+    const fEl = document.getElementById('bsmt-flicker');
+    function flick() {
+        fEl.style.display='block'; fEl.style.opacity='0';
+        // Flash on
+        fEl.style.transition='none'; fEl.style.opacity='0';
+        setTimeout(()=>{ fEl.style.opacity='1';
+            setTimeout(()=>{ fEl.style.opacity='0';
+                flickerTimeout=setTimeout(flick, 2000+Math.random()*1000);
+            }, 500);
+        }, 50);
+    }
+    flick();
+}
+function stopDarkRoomFlicker() {
+    clearTimeout(flickerTimeout);
+    const fEl=document.getElementById('bsmt-flicker');
+    fEl.style.opacity='0'; fEl.style.display='none';
+}
+
+// ── Carousel effect ────────────────────────────────────────────────────
+let carouselTimer = 0;
+let carouselTilt  = 0;
+function clearCarouselEffect() {
+    carouselInRoom=false; carouselTilt=0;
+    document.getElementById('c').style.transform='';
+}
+
+// ── Checkerboard messages ──────────────────────────────────────────────
+let lastCheckerMsg = 0;
+function triggerCheckerMsg() {
+    const now2=Date.now();
+    if(now2-lastCheckerMsg<4000) return;
+    lastCheckerMsg=now2;
+    if(Math.random()<0.3) {
+        const msg=CHECKER_MSGS[Math.floor(Math.random()*CHECKER_MSGS.length)];
+        showBsmtMsg(msg); setTimeout(()=>showBsmtMsg(''),1500);
+    }
+}
+
+// ── Update ─────────────────────────────────────────────────────────────
+let inDarkRoom=false;
+function updateBasement(dt) {
+    if(currentDim!=='basement') return;
+    const now2=Date.now();
+
+    // Which room is the player in?
+    const gx=Math.round(pos.x/ROOM_W), gz=Math.round(pos.z/ROOM_W);
+    const room=bsmtRooms[`${gx},${gz}`];
+
+    // Dark room flicker
+    const nowInDark = room?.type==='darkplace';
+    if(nowInDark&&!inDarkRoom){ inDarkRoom=true; startDarkRoomFlicker(); }
+    else if(!nowInDark&&inDarkRoom){ inDarkRoom=false; stopDarkRoomFlicker(); }
+
+    // Carousel tilt
+    carouselInRoom = room?.type==='carousel';
+    if(carouselInRoom) {
+        carouselTilt += dt*0.8;
+        document.getElementById('c').style.transform=`rotate(${Math.sin(carouselTilt)*4}deg)`;
+        // Spin carousel walls
+        const grp=bsmtMeshes[`${gx},${gz}`];
+        if(grp) grp.rotation.y+=dt*0.5;
+    } else {
+        if(document.getElementById('c').style.transform) clearCarouselEffect();
+    }
+
+    // Checkerboard messages
+    if(room?.type==='checkerboard') triggerCheckerMsg();
+
+    // Light guides follow player toward generator
+    lightGuides.forEach((g,i)=>{
+        const angle=now2*0.001+i*Math.PI*2/3;
+        g.mesh.position.set(pos.x+Math.cos(angle)*40, 40, pos.z+Math.sin(angle)*40);
+    });
+
+    // Enemy AI
+    bsmtEnemies.forEach(e=>{
+        if(!e.sprite) return;
+        const pdx=pos.x-e.x, pdz=pos.z-e.z;
+        const pdist=Math.sqrt(pdx*pdx+pdz*pdz);
+
+        if(e.type==='statue') {
+            // Only moves when lights are on AND player is NOT looking at it
+            if(lightsOn && !isLookingAt(e)) {
+                e.x+=pdx/(pdist||1)*e.def.speed*dt;
+                e.z+=pdz/(pdist||1)*e.def.speed*dt;
+            }
+            // Must stay inside dark room
+            if(e.room) {
+                const rx2=e.room.gx*ROOM_W, rz2=e.room.gz*ROOM_W;
+                e.x=Math.max(rx2-ROOM_W*0.7,Math.min(rx2+ROOM_W*0.7,e.x));
+                e.z=Math.max(rz2-ROOM_W*0.7,Math.min(rz2+ROOM_W*0.7,e.z));
+            }
+            if(pdist<60&&now2-e.lastHit>2000){
+                e.lastHit=now2; dealDmg(e.def.dmg);
+                showBsmtMsg('The Statue got you!'); setTimeout(()=>showBsmtMsg(''),2000);
+            }
+        } else if(e.type==='buddy') {
+            if(Math.random()<0.01){e.vx=(Math.random()-0.5)*e.def.speed;e.vz=(Math.random()-0.5)*e.def.speed;}
+            e.x+=e.vx*dt; e.z+=e.vz*dt;
+        } else if(e.type==='falseBuddy') {
+            // Chase player, pass through doors, repelled by meeting room
+            const curRoom=bsmtRooms[`${Math.round(e.x/ROOM_W)},${Math.round(e.z/ROOM_W)}`];
+            if(curRoom?.type==='meeting'||curRoom?.type==='falsemeeting') {
+                // Sink and die
+                e.y-=60*dt;
+                if(e.y<-100){
+                    bsmtScene.remove(e.sprite);
+                    bsmtEnemies.splice(bsmtEnemies.indexOf(e),1);
+                    db.ref('cd_basement_falseBuddy').remove();
+                    showBsmtMsg('The False Buddy has been vanquished!');
+                    setTimeout(()=>showBsmtMsg(''),3000);
+                    return;
+                }
+            } else {
+                e.x+=pdx/(pdist||1)*e.def.speed*dt;
+                e.z+=pdz/(pdist||1)*e.def.speed*dt;
+            }
+            if(pdist<70&&now2-e.lastHit>2000){
+                e.lastHit=now2; dealDmg(e.def.dmg);
+                showBsmtMsg('The False Buddy grabbed you!'); setTimeout(()=>showBsmtMsg(''),2000);
+            }
+        }
+        // Spider — stationary
+        if(e.sprite) e.sprite.position.set(e.x, e.y+e.def.size*0.5, e.z);
+    });
+
+    // Spider click to pet (raycaster)
+    const spiderSprites=bsmtEnemies.filter(e=>e.type==='spider'&&e.sprite).map(e=>e.sprite);
+    if(spiderSprites.length&&keys['KeyE']) {
+        bRay.setFromCamera(bMouse,bsmtCamera);
+        const hits=bRay.intersectObjects(spiderSprites);
+        if(hits.length){ keys['KeyE']=false; showBsmtMsg('The spider appreciates you! 🕸️'); setTimeout(()=>showBsmtMsg(''),2000); }
+    }
+}
+
+function isLookingAt(enemy) {
+    // Check if enemy is roughly in the centre of the screen
+    const wp=new THREE.Vector3(enemy.x,enemy.y+35,enemy.z);
+    const projected=wp.clone().project(bsmtCamera);
+    return Math.abs(projected.x)<0.35&&Math.abs(projected.y)<0.35&&projected.z<1;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────
+function showBsmtMsg(msg) {
+    const el=document.getElementById('bsmt-msg');
+    el.innerText=msg;
+    el.style.display=msg?'block':'none';
+}
+
 function loop() {
     requestAnimationFrame(loop);
     const dt = Math.min(clock3.getDelta(), 0.05);
