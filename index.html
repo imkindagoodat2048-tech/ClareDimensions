@@ -1101,7 +1101,7 @@ wrap.addEventListener('click', () => {
 
     } else if (enemy.type === 'mountainbuddy') {
         if (enemy.tamed) {
-            showPetNotif('💙 Your Mountain Buddy hugs you!');
+            showPetNotif('💙 Your Mountain Buddy nuzzles you!');
             return;
         }
         // 1/10 chance to tame
@@ -1566,11 +1566,7 @@ function buildRoomMesh(key, room) {
     const grp  = new THREE.Group();
     const wx   = room.gx * ROOM_W;
     const wz   = room.gz * ROOM_W;
-    const W    = ROOM_W, H = ROOM_H, T = WALL_T;
-
-    const isBig = room.type === 'starting' || room.type === 'darkplace';
-    const scale = isBig ? 1.5 : 1.0;
-    const RW = W * scale, RH = H, RD = W * scale;
+    const RW = ROOM_W, RH = ROOM_H, RD = ROOM_W;
 
     const wallMatFn = WALL_MATS[room.type] || WALL_MATS.plain;
     const wallMat   = wallMatFn();
@@ -1693,84 +1689,41 @@ function addLightbulb(grp, x, y, z, roomType) {
 // ── Room objects ──────────────────────────────────────────────────────
 function addRoomObjects(grp, room, RW, RH, RD) {
     const type = room.type;
-    const rng2 = seededRand((room.gx * 31 + room.gz * 17 + 99) % 9999);
 
-    // Objects that appear in ALL plain-type rooms
-    const hasObjects = ['plain','toilet','buddyspace','playroom','hostile','starting','carousel'].includes(type);
-    if (hasObjects) addObjects(grp, room, RW, RH, RD, rng2);
+    // Only meeting rooms get their structural furniture — everything else is empty
+    if (type === 'meeting' || type === 'falsemeeting') {
+        const numChairs = type === 'meeting' ? 2 : 1;
+        const table = new THREE.Mesh(new THREE.BoxGeometry(80,8,40), bMat(0x5c3a1e));
+        table.position.set(0, 35, 0);
+        table.userData.isTable = true;
+        grp.add(table);
+        for (let c = 0; c < numChairs; c++) {
+            const side  = c === 0 ? -1 : 1;
+            const chair = makeChair(bMat(0x3a2010));
+            chair.position.set(side * 60, 0, 0);
+            chair.rotation.y = c === 0 ? Math.PI/2 : -Math.PI/2;
+            chair.userData.isSittable = true;
+            chair.userData.chairIdx   = c;
+            chair.userData.roomKey    = `${room.gx},${room.gz}`;
+            grp.add(chair);
+        }
+    }
 
-    switch(type) {
-        case 'meeting': case 'falsemeeting': {
-            const numChairs = type==='meeting' ? 2 : 1;
-            // Table
-            const table = new THREE.Mesh(new THREE.BoxGeometry(80,8,40), bMat(0x5c3a1e));
-            table.position.set(0, 35, 0); grp.add(table);
-            table.userData.isTable = true;
-            // Chairs
-            for (let c=0; c<numChairs; c++) {
-                const side = c===0 ? -1 : 1;
-                const chair = makeChair(bMat(0x3a2010));
-                chair.position.set(side * 60, 0, 0);
-                chair.rotation.y = c===0 ? Math.PI/2 : -Math.PI/2;
-                chair.userData.isSittable = true;
-                chair.userData.chairIdx  = c;
-                chair.userData.roomKey   = `${room.gx},${room.gz}`;
-                grp.add(chair);
-            }
-            break;
-        }
-        case 'darkplace': {
-            // No objects, just darkness. Statues spawned in spawnRoomEnemies
-            break;
-        }
-        case 'generator': {
-            // Generator box
-            const gen = new THREE.Mesh(new THREE.BoxGeometry(60,80,40), bMat(0x888888,0xffcc00,0.15));
-            gen.position.set(0, 40, -RD/2 + 60);
-            gen.userData.isGenerator = true;
-            grp.add(gen);
-            // Switch
-            const sw = new THREE.Mesh(new THREE.BoxGeometry(12,20,8), bMat(0xdd3333));
-            sw.position.set(20, 70, -RD/2 + 42);
-            sw.userData.isSwitch = true;
-            grp.add(sw);
-            break;
-        }
-        case 'carousel': {
-            // Spinning colourful walls — handled in updateBasement via rotation
-            grp.userData.isCarousel = true;
-            break;
-        }
-        case 'toilet': {
-            const toilet = makeToilet();
-            toilet.position.set(0, 0, 0);
-            toilet.userData.isToilet = true;
-            grp.add(toilet);
-            break;
-        }
-        case 'buddyspace': {
-            // Mini trees
-            const treeCount = 1 + Math.floor(rng2() * 2);
-            for (let t=0; t<treeCount; t++) {
-                const tx = (rng2()-0.5)*RW*0.6, tz = (rng2()-0.5)*RD*0.6;
-                const mt = makeMiniTree();
-                mt.position.set(tx, 0, tz);
-                grp.add(mt);
-            }
-            break;
-        }
-        case 'playroom': {
-            addPlayEquipment(grp, RW, RH, RD);
-            break;
-        }
-        case 'hostile': {
-            addHazards(grp, room, RW, RH, RD, rng2);
-            break;
-        }
-        case 'starting': {
-            // Slightly more objects than plain
-            break;
-        }
+    if (type === 'generator') {
+        const gen = new THREE.Mesh(new THREE.BoxGeometry(60,80,40), bMat(0x888888,0xffcc00,0.15));
+        gen.position.set(0, 40, -RD/2 + 60);
+        gen.userData.isGenerator = true;
+        grp.add(gen);
+        const sw = new THREE.Mesh(new THREE.BoxGeometry(12,20,8), bMat(0xdd3333));
+        sw.position.set(20, 70, -RD/2 + 42);
+        sw.userData.isSwitch = true;
+        grp.add(sw);
+    }
+
+    if (type === 'toilet') {
+        const toilet = makeToilet();
+        toilet.userData.isToilet = true;
+        grp.add(toilet);
     }
 }
 
@@ -2018,8 +1971,8 @@ function checkBasementDoors() {
     if (!room) { prompt.style.display='none'; return; }
 
     const rx = gx * ROOM_W, rz = gz * ROOM_W;
-    const isBig = room.type==='starting'||room.type==='darkplace';
-    const half = ROOM_W * (isBig?1.5:1)/2;
+    const isBig = false;
+    const half = ROOM_W / 2;
 
     // Check if near a door gap → generate neighbor room
     const DIRS_GRID = [{dx:0,dz:-1,door:'N',opp:'S'},{dx:0,dz:1,door:'S',opp:'N'},{dx:1,dz:0,door:'E',opp:'W'},{dx:-1,dz:0,door:'W',opp:'E'}];
@@ -2265,30 +2218,37 @@ function clearLightGuides() {
 // ── Enemies ──────────────────────────────────────────────────────────
 function spawnRoomEnemies(room, wx, wz, RW, RD) {
     const rng3 = seededRand((room.gx*53+room.gz*37+7)%9999);
-    if(room.type==='darkplace') {
-        const count=1+Math.floor(rng3()*2); // 1 or 2 statues
-        for(let i=0;i<count;i++) {
-            const ex=wx+(rng3()-0.5)*RW*0.5, ez=wz+(rng3()-0.5)*RD*0.5;
-            spawnBsmtEnemy('statue',ex,0,ez,room);
+
+    if (room.type === 'darkplace') {
+        const count = 1 + Math.floor(rng3()*2);
+        for (let i=0; i<count; i++) {
+            const ex = wx+(rng3()-0.5)*RW*0.5, ez = wz+(rng3()-0.5)*RD*0.5;
+            spawnBsmtEnemy('statue', ex, 0, ez, room);
         }
     }
-    if(room.type==='buddyspace'||room.type==='plain') {
-        const count=1+Math.floor(rng3()*3);
-        for(let i=0;i<count;i++){
-            const ex=wx+(rng3()-0.5)*RW*0.4, ez=wz+(rng3()-0.5)*RD*0.4;
-            spawnBsmtEnemy('buddy',ex,0,ez,room);
+
+    if (room.type === 'buddyspace' || room.type === 'plain') {
+        const count = 1 + Math.floor(rng3()*3);
+        for (let i=0; i<count; i++) {
+            const ex = wx+(rng3()-0.5)*RW*0.4, ez = wz+(rng3()-0.5)*RD*0.4;
+            spawnBsmtEnemy('buddy', ex, 0, ez, room);
         }
     }
-    if(['plain','playroom','carousel'].includes(room.type) && rng3()<0.4) {
-        const ex=wx+(rng3()-0.5)*RW*0.4, ez=wz+(rng3()-0.5)*RD*0.4;
-        spawnBsmtEnemy('spider',ex,0,ez,room);
+
+    // Spiders spawn in ANY room, 40% chance, 1-2 per room
+    if (rng3() < 0.4) {
+        const count = 1 + Math.floor(rng3() * 2);
+        for (let i=0; i<count; i++) {
+            const ex = wx+(rng3()-0.5)*RW*0.4, ez = wz+(rng3()-0.5)*RD*0.4;
+            spawnBsmtEnemy('spider', ex, 0, ez, room);
+        }
     }
 }
 
 const BSMT_ENEMY_DEFS = {
     statue:     {img:'enemies/statue.png',    speed:BSMT_SPEED*2, size:70, dmg:40},
     buddy:      {img:'enemies/buddy.png',     speed:BSMT_SPEED*0.5, size:50, dmg:0},
-    spider:     {img:'enemies/giantspider.png',speed:0, size:40, dmg:0},
+    spider:     {img:'enemies/giantspider.png', speed:0,              size:40, dmg:0,  tint:0xff4444},
     falseBuddy: {img:'enemies/notbuddy.png',  speed:BSMT_SPEED*1.2, size:80, dmg:30},
 };
 
@@ -2300,6 +2260,7 @@ function spawnBsmtEnemy(type, wx, wy, wz, room) {
         sprite:null, lastHit:0};
     getSpriteTexture(type, def, tex=>{
         const mat=new THREE.SpriteMaterial({map:tex,transparent:true,depthTest:true,depthWrite:false,sizeAttenuation:true});
+        if (def.tint) mat.color.set(def.tint);
         const sp=new THREE.Sprite(mat);
         sp.scale.set(def.size,def.size,1);
         sp.position.set(wx,wy+def.size*0.5,wz);
@@ -2502,37 +2463,32 @@ function resolveBasementCollision() {
             const room = bsmtRooms[rk];
             if (!room) continue;
 
-            const isBig = room.type === 'starting' || room.type === 'darkplace';
-            const half  = ROOM_W * (isBig ? 1.5 : 1.0) / 2 - WALL_T / 2;
-            const rx    = room.gx * ROOM_W;
-            const rz2   = room.gz * ROOM_W;
+            // Always use fixed grid size — no big rooms, stops clipping
+            const half = ROOM_W / 2 - WALL_T / 2;
+            const rx   = room.gx * ROOM_W;
+            const rz2  = room.gz * ROOM_W;
 
-            // Player local coords relative to this room's centre
             const lx = pos.x - rx;
             const lz = pos.z - rz2;
 
-            // Skip if player is far from this room
             if (Math.abs(lx) > half + PLAYER_R * 4 || Math.abs(lz) > half + PLAYER_R * 4) continue;
 
-            // Four walls: North (lz < -half), South (lz > half), East (lx > half), West (lx < -half)
             const walls = [
-                { perpAxis:'z', perpLocal: lz,  wallFace: -half, side: -1, door: 'N', paraLocal: lx },
-                { perpAxis:'z', perpLocal: lz,  wallFace:  half, side:  1, door: 'S', paraLocal: lx },
-                { perpAxis:'x', perpLocal: lx,  wallFace:  half, side:  1, door: 'E', paraLocal: lz },
-                { perpAxis:'x', perpLocal: lx,  wallFace: -half, side: -1, door: 'W', paraLocal: lz },
+                { perpAxis:'z', perpLocal: lz, wallFace: -half, side: -1, door: 'N', paraLocal: lx },
+                { perpAxis:'z', perpLocal: lz, wallFace:  half, side:  1, door: 'S', paraLocal: lx },
+                { perpAxis:'x', perpLocal: lx, wallFace:  half, side:  1, door: 'E', paraLocal: lz },
+                { perpAxis:'x', perpLocal: lx, wallFace: -half, side: -1, door: 'W', paraLocal: lz },
             ];
 
             walls.forEach(w => {
-                // Has player crossed this wall face?
                 const crossed = w.side > 0
                     ? (w.perpLocal + PLAYER_R > w.wallFace)
                     : (w.perpLocal - PLAYER_R < w.wallFace);
                 if (!crossed) return;
 
-                // Is there a door gap and is the player aligned with it?
-                if (room.doors[w.door] && Math.abs(w.paraLocal) < DOOR_W / 2 - PLAYER_R) return;
+                // Wider gap check — no PLAYER_R subtraction so doorways feel natural
+                if (room.doors[w.door] && Math.abs(w.paraLocal) < DOOR_W / 2) return;
 
-                // Push player back to just inside the wall
                 if (w.perpAxis === 'z') {
                     pos.z = rz2 + w.wallFace - w.side * PLAYER_R;
                 } else {
