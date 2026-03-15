@@ -453,13 +453,34 @@ function initRenderer() {
     document.addEventListener('keydown', e => {
         keys[e.code] = true;
         if(e.code==='Space') e.preventDefault();
-        // Press S (while stuck) to unsoftlock — eject out of any collision box
+        // Press G to unsoftlock — eject out of any collision box or interior
+        if(e.code==='KeyG') {
+            if(currentDim==='ghosttown' && gtInInterior) {
+                leaveInterior();
+            } else if(currentDim==='ghosttown') {
+                const PR = 40;
+                let ejected = false;
+                for (const box of gtCollisionBoxes) {
+                    if (pos.x > box.minX - PR && pos.x < box.maxX + PR &&
+                        pos.z > box.minZ - PR && pos.z < box.maxZ + PR) {
+                        const cx = (box.minX + box.maxX) / 2;
+                        const cz = (box.minZ + box.maxZ) / 2;
+                        const edx = pos.x - cx, edz = pos.z - cz;
+                        const elen = Math.sqrt(edx*edx + edz*edz) || 1;
+                        pos.x = cx + (edx/elen) * ((box.maxX-box.minX)/2 + PR + 20);
+                        pos.z = cz + (edz/elen) * ((box.maxZ-box.minZ)/2 + PR + 20);
+                        ejected = true; break;
+                    }
+                }
+                if (!ejected) { pos.x = 0; pos.z = 0; } // fallback: reset to town centre
+            }
+        }
+        // Legacy S-key unsoftlock (keep for compatibility)
         if(e.code==='KeyS' && currentDim==='ghosttown') {
             const PR = 40;
             for (const box of gtCollisionBoxes) {
                 if (pos.x > box.minX - PR && pos.x < box.maxX + PR &&
                     pos.z > box.minZ - PR && pos.z < box.maxZ + PR) {
-                    // Player is stuck — find nearest exit direction and push out
                     const cx = (box.minX + box.maxX) / 2;
                     const cz = (box.minZ + box.maxZ) / 2;
                     const edx = pos.x - cx, edz = pos.z - cz;
@@ -1958,6 +1979,9 @@ function generateGhostTown() {
     db.ref('cd_gt_weather').set('day');
     gtClockData = generateWeatherClock(Date.now() % 99999);
     gtGenerated = true;
+    // Respawn enemies after regeneration
+    clearGTEnemies();
+    spawnGTEnemies();
     showGTMsg('🏚️ Ghost Town generated!'); setTimeout(()=>showGTMsg(''), 2500);
 }
 
@@ -2312,8 +2336,8 @@ function enterInterior(bldgIdx) {
     activeScene  = b.scene;
     activeCamera = b.camera;
 
-    // Spawn just inside the front door (south side, facing north)
-    pos.x = 0; pos.y = 0; pos.z = b.sz.d * 0.35;
+    // Spawn inside, away from the front wall (front wall inner edge ~sz.d*0.45)
+    pos.x = 0; pos.y = 0; pos.z = b.sz.d * 0.25;
     yaw = Math.PI;
 
     document.getElementById('bsmt-interact').innerText = '[ E ] Exit building';
@@ -2635,21 +2659,9 @@ function updateGhostTown(dt) {
             }
 
         } else if (e.type === 'spiderRed') {
-            // Spider view range: 825 units forward (15x body), 550 units vertical
-            const SPIDER_SIGHT_H = 825;  // horizontal sight range
-            const SPIDER_SIGHT_V = 550;  // vertical (Y) sight range
-            // Spider faces the direction it's currently moving (or toward player if chasing)
-            const spiderFaceAngle = e.faceAngle || 0;
-            // Angle from spider to player
-            const angleToPlayer = Math.atan2(pdx, pdz);
-            // Angular difference (how far off-center player is)
-            const angleDiff = Math.abs(((angleToPlayer - spiderFaceAngle) + Math.PI) % (Math.PI*2) - Math.PI);
-            // Vertical distance check
-            const pdy = (_epx === pos.x ? pos.y : 0) - (e.y || 0);
-            const canSeePlayer = !playerSafe
-                && pdist < SPIDER_SIGHT_H
-                && Math.abs(pdy) < SPIDER_SIGHT_V
-                && angleDiff < Math.PI * 0.55; // ~100 degree FOV
+            // Spider view range: 825 units (15x 55-unit body) in all directions
+            const SPIDER_SIGHT_R = 825;
+            const canSeePlayer = !playerSafe && pdist < SPIDER_SIGHT_R;
 
             // Every 20s pick a random wander direction for 3s, then resume chasing
             if (!e.wanderTimer) e.wanderTimer = 0;
@@ -2659,7 +2671,6 @@ function updateGhostTown(dt) {
                 // Wandering
                 e.x += e.wanderDir.x * e.def.speed * 0.6 * dt;
                 e.z += e.wanderDir.z * e.def.speed * 0.6 * dt;
-                e.faceAngle = Math.atan2(e.wanderDir.x, e.wanderDir.z);
                 if (e.wanderTimer >= 3) { e.wanderDir = null; e.wanderTimer = 0; }
             } else if (canSeePlayer) {
                 // Chase — spider has spotted the player
@@ -2667,7 +2678,6 @@ function updateGhostTown(dt) {
                 const perpAngle = Math.atan2(pdz, pdx) + (e.spreadOffset || 0);
                 e.x += Math.cos(perpAngle) * e.def.speed * dt;
                 e.z += Math.sin(perpAngle) * e.def.speed * dt;
-                e.faceAngle = Math.atan2(pdx, pdz);
                 if (e.wanderTimer >= 20) {
                     const sideAngle = Math.atan2(pdz, pdx) + (Math.random() < 0.5 ? Math.PI/2 : -Math.PI/2);
                     e.wanderDir = { x: Math.cos(sideAngle), z: Math.sin(sideAngle) };
@@ -3204,6 +3214,9 @@ function generateMoon() {
     clearMoonEnemies();
     spawnMoonEnemies(rng);
     moonGenerated = true;
+    // Respawn enemies after regeneration
+    clearMoonEnemies();
+    spawnMoonEnemies(rng);
     showPetNotif('🌕 Moon generated!');
 }
 
@@ -3374,6 +3387,14 @@ function updateMimic(e, dt, pdx, pdz, pdist, now) {
         }
 
     } else if (e.mode === 'stalk') {
+        // If nobody left on moon, abort back to mountain
+        const moonCount = 1 + Object.values(otherPlayers).filter(p => p.dim === 'moon').length;
+        if (moonCount === 0) {
+            e.mode = 'mountain';
+            e.x = mimicMountainPos.x; e.z = mimicMountainPos.z;
+            db.ref('cd_moon_mimic').set({ mode:'mountain', x: e.x, z: e.z });
+            return;
+        }
         e.opacity = (mimicTarget === myId) ? 1 : 0.5;
         // Target a point BEHIND the player (not toward them)
         const behindAng = yaw + Math.PI;
@@ -3393,6 +3414,14 @@ function updateMimic(e, dt, pdx, pdz, pdist, now) {
         }
 
     } else if (e.mode === 'hunt') {
+        // If nobody left on moon, abort back to mountain
+        const moonCount2 = 1 + Object.values(otherPlayers).filter(p => p.dim === 'moon').length;
+        if (moonCount2 === 0) {
+            e.mode = 'mountain';
+            e.x = mimicMountainPos.x; e.z = mimicMountainPos.z;
+            db.ref('cd_moon_mimic').set({ mode:'mountain', x: e.x, z: e.z });
+            return;
+        }
         e.opacity = 1;
         const huntSpeed = SPEED * 1.1;
         const len = pdist || 1;
@@ -3417,6 +3446,24 @@ function updateMimic(e, dt, pdx, pdz, pdist, now) {
 
     } else if (e.mode === 'disguise') {
         e.opacity = 1;
+        // Start 5-minute return timer when entering disguise mode
+        if (!e.disguiseReturnAt) e.disguiseReturnAt = now + 5 * 60 * 1000;
+
+        // Count players on moon (host + others)
+        const moonPlayerCount = 1 + Object.values(otherPlayers).filter(p => p.dim === 'moon').length;
+
+        if (now >= e.disguiseReturnAt || moonPlayerCount === 0) {
+            // Time's up or nobody left — return to mountain
+            e.mode = 'mountain';
+            e.disguiseReturnAt = 0;
+            e.x = mimicMountainPos.x; e.z = mimicMountainPos.z;
+            if (e.sprite) e.sprite.visible = true;
+            if (e.disguiseMesh) { moonScene.remove(e.disguiseMesh); e.disguiseMesh = null; }
+            if (e.disguiseTag)  { e.disguiseTag.remove(); e.disguiseTag = null; }
+            db.ref('cd_moon_mimic').set({ mode:'mountain', x: e.x, z: e.z });
+            return;
+        }
+
         if (pdist > 200) {
             const len = pdist || 1;
             e.x += (pdx/len) * SPEED * 0.9 * dt;
@@ -3425,8 +3472,8 @@ function updateMimic(e, dt, pdx, pdz, pdist, now) {
         // Update disguise mesh + nametag position, face player
         if (e.disguiseMesh) {
             e.disguiseMesh.position.set(e.x, getMoonTerrainY(e.x,e.z), e.z);
-            // Face the player
-            const faceAngle = Math.atan2(pdx, pdz);
+            // Face the player (negate because mesh faces +Z by default)
+            const faceAngle = Math.atan2(-pdx, -pdz);
             e.disguiseMesh.rotation.y = faceAngle;
         }
         if (e.disguiseTag && activeCamera) {
@@ -3505,8 +3552,15 @@ function applyMimicState(data) {
     if (data.mode === 'disguise' && data.color) {
         mimic.disguiseColor = data.color;
         mimic.disguiseName  = data.name || mimicTarget || '???';
+        mimic.disguiseReturnAt = Date.now() + 5 * 60 * 1000; // 5 min timer
         if (mimic.sprite) mimic.sprite.visible = false;
         buildMimicDisguise(mimic, data.color, mimic.disguiseName);
+    }
+    if (data.mode === 'mountain') {
+        mimic.disguiseReturnAt = 0;
+        if (mimic.disguiseMesh) { moonScene?.remove(mimic.disguiseMesh); mimic.disguiseMesh = null; }
+        if (mimic.disguiseTag)  { mimic.disguiseTag.remove(); mimic.disguiseTag = null; }
+        if (mimic.sprite) mimic.sprite.visible = true;
     }
 }
 
