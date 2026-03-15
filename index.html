@@ -450,7 +450,27 @@ function initRenderer() {
     });
 
     clock3 = new THREE.Clock();
-    document.addEventListener('keydown', e => { keys[e.code] = true; if(e.code==='Space') e.preventDefault(); });
+    document.addEventListener('keydown', e => {
+        keys[e.code] = true;
+        if(e.code==='Space') e.preventDefault();
+        // Press S (while stuck) to unsoftlock — eject out of any collision box
+        if(e.code==='KeyS' && currentDim==='ghosttown') {
+            const PR = 40;
+            for (const box of gtCollisionBoxes) {
+                if (pos.x > box.minX - PR && pos.x < box.maxX + PR &&
+                    pos.z > box.minZ - PR && pos.z < box.maxZ + PR) {
+                    // Player is stuck — find nearest exit direction and push out
+                    const cx = (box.minX + box.maxX) / 2;
+                    const cz = (box.minZ + box.maxZ) / 2;
+                    const edx = pos.x - cx, edz = pos.z - cz;
+                    const elen = Math.sqrt(edx*edx + edz*edz) || 1;
+                    pos.x = cx + (edx/elen) * ((box.maxX-box.minX)/2 + PR + 10);
+                    pos.z = cz + (edz/elen) * ((box.maxZ-box.minZ)/2 + PR + 10);
+                    break;
+                }
+            }
+        }
+    });
     document.addEventListener('keyup',   e => { keys[e.code] = false; });
     document.addEventListener('mousemove', e => {
         if (!locked) return;
@@ -1124,7 +1144,7 @@ wrap.addEventListener('click', () => {
 
     } else if (enemy.type === 'mountainbuddy') {
         if (enemy.tamed) {
-            showPetNotif('💙 Your Mountain Buddy nuzzles you!');
+            showPetNotif('💙 Your Mountain Buddy hugs you!');
             return;
         }
         // 1/10 chance to tame
@@ -1254,6 +1274,7 @@ function electEnemyHost(dim) {
             // Actually spawn enemies now
             if (dim === 'grasslands') spawnGrasslandsEnemies();
             else if (dim === 'ghosttown') spawnGTEnemies();
+            else if (dim === 'moon') spawnMoonEnemies();
         }
     });
     // Listen for host changes
@@ -1286,6 +1307,13 @@ function pushEnemyState(dim) {
             state[i] = { type: e.type, x: +e.x.toFixed(1), z: +e.z.toFixed(1) };
         });
         db.ref('cd_enemy_state/ghosttown').set(state);
+    } else if (dim === 'moon') {
+        const state = {};
+        moonEnemies.forEach((e, i) => {
+            if (!e.sprite) return;
+            state[i] = { type: e.type, x: +e.x.toFixed(1), z: +e.z.toFixed(1) };
+        });
+        db.ref('cd_enemy_state/moon').set(state);
     }
 }
 
@@ -1334,6 +1362,28 @@ function applyRemoteEnemies(state, dim) {
                 remoteGTSprites[id].position.set(e.x, getGTTerrainY(e.x, e.z) + def.size * 0.5, e.z);
             }
         }
+    } else if (dim === 'moon') {
+        const ids = new Set(Object.keys(state));
+        for (const id in remoteMoonSprites) {
+            if (!ids.has(id)) { moonScene?.remove(remoteMoonSprites[id]); delete remoteMoonSprites[id]; }
+        }
+        for (const id in state) {
+            const e = state[id];
+            const defMap = { martian1:{size:80}, martian2:{size:80}, martian3:{size:80}, mimic:{size:120} };
+            const def = defMap[e.type]; if (!def) continue;
+            const imgMap = { martian1:'enemies/martian1.png', martian2:'enemies/martian2.png', martian3:'enemies/martian3.png', mimic:'enemies/mimic.png' };
+            if (!remoteMoonSprites[id]) {
+                getSpriteTexture(e.type, {img: imgMap[e.type]||'enemies/mimic.png'}, tex => {
+                    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, depthWrite: false, sizeAttenuation: true });
+                    const sp = new THREE.Sprite(mat);
+                    sp.scale.set(def.size, def.size, 1);
+                    moonScene?.add(sp);
+                    remoteMoonSprites[id] = sp;
+                });
+            } else {
+                remoteMoonSprites[id].position.set(e.x, getMoonTerrainY(e.x, e.z) + def.size * 0.5, e.z);
+            }
+        }
     }
 }
 
@@ -1344,6 +1394,9 @@ function clearRemoteEnemies(dim) {
     } else if (dim === 'ghosttown') {
         for (const id in remoteGTSprites) { gtScene?.remove(remoteGTSprites[id]); }
         remoteGTSprites = {};
+    } else if (dim === 'moon') {
+        for (const id in remoteMoonSprites) { moonScene?.remove(remoteMoonSprites[id]); }
+        remoteMoonSprites = {};
     }
 }
 
@@ -1429,36 +1482,57 @@ function update(dt) {
         pos.y = 0;
     } else if (currentDim === 'ghosttown') {
         let nx = newX, nz = newZ;
-        nx = Math.max(-GT_SIZE+50, Math.min(GT_SIZE-50, nx));
-        nz = Math.max(-GT_SIZE+50, Math.min(GT_SIZE-50, nz));
-        // Wall collision — test X and Z separately so player can slide along walls
         const PR = 40; // player radius
-        let blocked = false;
-        for (const box of gtCollisionBoxes) {
-            if (nx > box.minX - PR && nx < box.maxX + PR && nz > box.minZ - PR && nz < box.maxZ + PR) {
-                blocked = true; break;
+
+        if (gtInInterior && gtInteriorBuilding) {
+            // ── Interior movement: clamp to room bounds + per-building wall boxes ──
+            const b = gtInteriorBuilding;
+            const hw = b.sz.w * 0.45 - PR, hd = b.sz.d * 0.45 - PR;
+            nx = Math.max(-hw, Math.min(hw, nx));
+            nz = Math.max(-hd, Math.min(hd, nz));
+            // Build interior wall AABBs once
+            if (!b.iWalls) buildInteriorWalls(b);
+            let blocked = false;
+            for (const box of b.iWalls) {
+                if (nx > box.minX-PR && nx < box.maxX+PR && nz > box.minZ-PR && nz < box.maxZ+PR) { blocked=true; break; }
             }
-        }
-        if (!blocked) { pos.x = nx; pos.z = nz; }
-        else {
-            // Try sliding on X only
-            let blockedX = false;
-            for (const box of gtCollisionBoxes) {
-                if (nx > box.minX - PR && nx < box.maxX + PR && pos.z > box.minZ - PR && pos.z < box.maxZ + PR) {
-                    blockedX = true; break;
+            if (!blocked) { pos.x = nx; pos.z = nz; }
+            else {
+                let bX=false;
+                for (const box of b.iWalls) {
+                    if (nx > box.minX-PR && nx < box.maxX+PR && pos.z > box.minZ-PR && pos.z < box.maxZ+PR) { bX=true; break; }
                 }
-            }
-            if (!blockedX) pos.x = nx;
-            // Try sliding on Z only
-            let blockedZ = false;
-            for (const box of gtCollisionBoxes) {
-                if (pos.x > box.minX - PR && pos.x < box.maxX + PR && nz > box.minZ - PR && nz < box.maxZ + PR) {
-                    blockedZ = true; break;
+                if (!bX) pos.x = nx;
+                let bZ=false;
+                for (const box of b.iWalls) {
+                    if (pos.x > box.minX-PR && pos.x < box.maxX+PR && nz > box.minZ-PR && nz < box.maxZ+PR) { bZ=true; break; }
                 }
+                if (!bZ) pos.z = nz;
             }
-            if (!blockedZ) pos.z = nz;
+            pos.y = 0;
+        } else {
+            // ── Exterior movement: world-space wall collision ──
+            nx = Math.max(-GT_SIZE+50, Math.min(GT_SIZE-50, nx));
+            nz = Math.max(-GT_SIZE+50, Math.min(GT_SIZE-50, nz));
+            let blocked = false;
+            for (const box of gtCollisionBoxes) {
+                if (nx > box.minX-PR && nx < box.maxX+PR && nz > box.minZ-PR && nz < box.maxZ+PR) { blocked=true; break; }
+            }
+            if (!blocked) { pos.x = nx; pos.z = nz; }
+            else {
+                let blockedX=false;
+                for (const box of gtCollisionBoxes) {
+                    if (nx > box.minX-PR && nx < box.maxX+PR && pos.z > box.minZ-PR && pos.z < box.maxZ+PR) { blockedX=true; break; }
+                }
+                if (!blockedX) pos.x = nx;
+                let blockedZ=false;
+                for (const box of gtCollisionBoxes) {
+                    if (pos.x > box.minX-PR && pos.x < box.maxX+PR && nz > box.minZ-PR && nz < box.maxZ+PR) { blockedZ=true; break; }
+                }
+                if (!blockedZ) pos.z = nz;
+            }
+            pos.y = getGTTerrainY(pos.x, pos.z);
         }
-        pos.y = getGTTerrainY(pos.x, pos.z);
     } else if (currentDim === 'moon') {
         newX = Math.max(-MOON_SIZE+50, Math.min(MOON_SIZE-50, newX));
         newZ = Math.max(-MOON_SIZE+50, Math.min(MOON_SIZE-50, newZ));
@@ -1518,6 +1592,7 @@ function update(dt) {
     if (currentDim === 'moon') updateMoon(dt);
     if (currentDim === 'grasslands') pushEnemyState('grasslands');
     else if (currentDim === 'ghosttown') pushEnemyState('ghosttown');
+    else if (currentDim === 'moon') pushEnemyState('moon');
 
     // Animate hub portal glow
     if (currentDim === 'hub' && hubPortalMeshes) {
@@ -1991,23 +2066,34 @@ function placeBuilding(type, bx, bz, rng, rot) {
     grp.position.set(bx, groundY, bz);
     gtScene.add(grp);
 
-    // Single AABB for the whole building footprint.
-    // Project the four corners of the rotated rectangle into world space,
-    // then take the min/max to get a tight axis-aligned box.
+    // Per-wall AABBs — only the 4 exterior walls block the player.
+    // Furniture/interior objects have no collision.
+    // Each wall is a thin rectangle in local space; we rotate its corners to world space.
     const cosR = Math.cos(brot), sinR = Math.sin(brot);
-    const hw = W / 2 + WT, hd = D / 2 + WT; // half-extents with wall thickness
-    const corners = [
-        { lx: -hw, lz: -hd }, { lx:  hw, lz: -hd },
-        { lx:  hw, lz:  hd }, { lx: -hw, lz:  hd },
-    ];
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (const c of corners) {
-        const wx2 = bx + c.lx * cosR - c.lz * sinR;
-        const wz2 = bz + c.lx * sinR + c.lz * cosR;
-        if (wx2 < minX) minX = wx2; if (wx2 > maxX) maxX = wx2;
-        if (wz2 < minZ) minZ = wz2; if (wz2 > maxZ) maxZ = wz2;
+    function addWallAABB(lx0, lz0, lx1, lz1) {
+        // Convert two local-space corners to world space and get AABB
+        const pts = [{lx:lx0,lz:lz0},{lx:lx1,lz:lz1}];
+        let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
+        for (const p of pts) {
+            const wx2 = bx + p.lx*cosR - p.lz*sinR;
+            const wz2 = bz + p.lx*sinR + p.lz*cosR;
+            if(wx2<minX)minX=wx2; if(wx2>maxX)maxX=wx2;
+            if(wz2<minZ)minZ=wz2; if(wz2>maxZ)maxZ=wz2;
+        }
+        // Ensure minimum thickness so collision works even when wall is axis-aligned
+        if(maxX-minX < WT*2) { maxX+=WT; minX-=WT; }
+        if(maxZ-minZ < WT*2) { maxZ+=WT; minZ-=WT; }
+        gtCollisionBoxes.push({ minX, maxX, minZ, maxZ });
     }
-    gtCollisionBoxes.push({ minX, maxX, minZ, maxZ });
+    const hw = W/2, hd = D/2;
+    // Back wall  (local z = -D/2)
+    addWallAABB(-hw, -hd-WT,  hw, -hd+WT);
+    // Front wall (local z = +D/2) — same, door gap doesn't matter for AABB
+    addWallAABB(-hw,  hd-WT,  hw,  hd+WT);
+    // Left wall  (local x = -W/2)
+    addWallAABB(-hw-WT, -hd, -hw+WT,  hd);
+    // Right wall (local x = +W/2)
+    addWallAABB( hw-WT, -hd,  hw+WT,  hd);
 
     const bldg = { type, x:bx, z:bz, rot:brot, mesh:grp, sz, interior:null };
     gtBuildings.push(bldg);
@@ -2341,6 +2427,23 @@ function buildInterior(b) {
     }
 }
 
+// Build AABBs for the 4 interior walls so collision works inside
+function buildInteriorWalls(b) {
+    const W = b.sz.w*0.9, D = b.sz.d*0.9, WT = 8;
+    const hw = W/2, hd = D/2;
+    b.iWalls = [
+        { minX: -hw-WT, maxX: -hw+WT, minZ: -hd,    maxZ: hd    }, // left wall
+        { minX:  hw-WT, maxX:  hw+WT, minZ: -hd,    maxZ: hd    }, // right wall
+        { minX: -hw,    maxX:  hw,    minZ: -hd-WT,  maxZ: -hd+WT }, // back wall
+        { minX: -hw,    maxX:  hw,    minZ:  hd-WT,  maxZ:  hd+WT }, // front wall (door gap handled by room clamp)
+    ];
+    // Also add internal divider walls for house2
+    if (b.type === 'house2') {
+        b.iWalls.push({ minX: -WT/2, maxX: WT/2, minZ: -hd, maxZ: 0 }); // vertical divider (back half)
+        b.iWalls.push({ minX: 0,     maxX: W/2,  minZ: -WT/2, maxZ: WT/2 }); // horizontal divider (right half)
+    }
+}
+
 function makeGTToilet() {
     const g=new THREE.Group();
     g.add(mkBox(30,30,40,new THREE.MeshLambertMaterial({color:0xeeeeee}),0,15,0));
@@ -2379,6 +2482,7 @@ function spawnGTEnemies() {
     clearGTEnemies();
     peepingTomActive = false;
     megaSpiderExists = false;
+    if (!isEnemyHost) return; // non-hosts get enemy positions from Firebase
     const w = gtWeather;
     const rng = seededRand(Date.now()%9999);
 
@@ -2500,12 +2604,19 @@ function updateGhostTown(dt) {
         checkGTDoors();
     }
 
-    // Enemy AI
+    // Enemy AI — only the host runs AI and pushes state; non-hosts render via applyRemoteEnemies
+    if (!isEnemyHost) return;
     const spd = (gtSlowTimer > 0) ? GT_SPEED * 0.4 : GT_SPEED;
     gtEnemies.forEach(e => {
         if (!e.sprite) return;
-        const pdx = pos.x - e.x, pdz = pos.z - e.z;
+        // When player is inside a building, use the building's world position
+        // so enemies can't track or damage the player through walls
+        const _epx = (gtInInterior && gtInteriorBuilding) ? gtInteriorBuilding.x : pos.x;
+        const _epz = (gtInInterior && gtInteriorBuilding) ? gtInteriorBuilding.z : pos.z;
+        const pdx = _epx - e.x, pdz = _epz - e.z;
         const pdist = Math.sqrt(pdx*pdx + pdz*pdz);
+        // Skip all damage and aggro if player is safely inside
+        const playerSafe = gtInInterior;
 
         if (e.type === 'statue') {
             e.statuePhaseTimer += dt;
@@ -2519,34 +2630,58 @@ function updateGhostTown(dt) {
                 e.x += (pdx/len)*e.def.speed*dt;
                 e.z += (pdz/len)*e.def.speed*dt;
             }
-            if (pdist < 60 && now - e.lastHit > 2000) {
+            if (!playerSafe && pdist < 60 && now - e.lastHit > 2000) {
                 e.lastHit = now; dealGTDmg(30); showGTMsg('A Statue got you!'); setTimeout(()=>showGTMsg(''),2000);
             }
 
         } else if (e.type === 'spiderRed') {
+            // Spider view range: 825 units forward (15x body), 550 units vertical
+            const SPIDER_SIGHT_H = 825;  // horizontal sight range
+            const SPIDER_SIGHT_V = 550;  // vertical (Y) sight range
+            // Spider faces the direction it's currently moving (or toward player if chasing)
+            const spiderFaceAngle = e.faceAngle || 0;
+            // Angle from spider to player
+            const angleToPlayer = Math.atan2(pdx, pdz);
+            // Angular difference (how far off-center player is)
+            const angleDiff = Math.abs(((angleToPlayer - spiderFaceAngle) + Math.PI) % (Math.PI*2) - Math.PI);
+            // Vertical distance check
+            const pdy = (_epx === pos.x ? pos.y : 0) - (e.y || 0);
+            const canSeePlayer = !playerSafe
+                && pdist < SPIDER_SIGHT_H
+                && Math.abs(pdy) < SPIDER_SIGHT_V
+                && angleDiff < Math.PI * 0.55; // ~100 degree FOV
+
             // Every 20s pick a random wander direction for 3s, then resume chasing
             if (!e.wanderTimer) e.wanderTimer = 0;
             if (!e.wanderDir) e.wanderDir = null;
             e.wanderTimer += dt;
             if (e.wanderDir) {
-                // Wandering sideways
+                // Wandering
                 e.x += e.wanderDir.x * e.def.speed * 0.6 * dt;
                 e.z += e.wanderDir.z * e.def.speed * 0.6 * dt;
+                e.faceAngle = Math.atan2(e.wanderDir.x, e.wanderDir.z);
                 if (e.wanderTimer >= 3) { e.wanderDir = null; e.wanderTimer = 0; }
-            } else {
-                // Chase with a small perpendicular spread (anti-clump)
+            } else if (canSeePlayer) {
+                // Chase — spider has spotted the player
                 const len = pdist || 1;
                 const perpAngle = Math.atan2(pdz, pdx) + (e.spreadOffset || 0);
                 e.x += Math.cos(perpAngle) * e.def.speed * dt;
                 e.z += Math.sin(perpAngle) * e.def.speed * dt;
+                e.faceAngle = Math.atan2(pdx, pdz);
                 if (e.wanderTimer >= 20) {
-                    // Start wander — pick a random sideways direction
                     const sideAngle = Math.atan2(pdz, pdx) + (Math.random() < 0.5 ? Math.PI/2 : -Math.PI/2);
                     e.wanderDir = { x: Math.cos(sideAngle), z: Math.sin(sideAngle) };
                     e.wanderTimer = 0;
                 }
+            } else {
+                // Wander randomly — player not in sight
+                if (!e.wanderDir || e.wanderTimer >= 4) {
+                    const randAngle = Math.random() * Math.PI * 2;
+                    e.wanderDir = { x: Math.cos(randAngle), z: Math.sin(randAngle) };
+                    e.wanderTimer = 0;
+                }
             }
-            if (pdist < 60 && now - e.lastHit > 1500) {
+            if (!playerSafe && canSeePlayer && pdist < 60 && now - e.lastHit > 1500) {
                 e.lastHit = now; dealGTDmg(15); showGTMsg('A spider bit you!'); setTimeout(()=>showGTMsg(''),1500);
             }
 
@@ -2568,7 +2703,7 @@ function updateGhostTown(dt) {
                 e.x += (pdx/len)*e.def.speed*dt;
                 e.z += (pdz/len)*e.def.speed*dt;
             }
-            if (pdist < 70 && now - e.lastHit > 2000) {
+            if (!playerSafe && pdist < 70 && now - e.lastHit > 2000) {
                 e.lastHit = now; dealGTDmg(25); showGTMsg('The False Buddy hit you!'); setTimeout(()=>showGTMsg(''),2000);
             }
 
@@ -2788,6 +2923,12 @@ function enterMoon() {
     // Mimic sync
     db.ref('cd_moon_mimic').on('value', snap => {
         if (snap.exists()) applyMimicState(snap.val());
+    });
+    // Elect host and spawn/listen for moon enemies
+    electEnemyHost('moon');
+    db.ref('cd_enemy_state/moon').on('value', snap => {
+        if (isEnemyHost || !snap.exists()) return;
+        applyRemoteEnemies(snap.val(), 'moon');
     });
 }
 
@@ -3135,6 +3276,7 @@ function clearMoonEnemies() {
 
 function spawnMoonEnemies(rng) {
     clearMoonEnemies();
+    if (!isEnemyHost) return;
     // Martians in colony (centre) — 15-20
     const colCount = 15 + Math.floor(rng()*6);
     for (let i = 0; i < colCount; i++) {
@@ -3186,6 +3328,7 @@ function updateMoon(dt) {
     if (currentDim !== 'moon') return;
     const now = Date.now();
 
+    if (!isEnemyHost) return; // non-hosts render via applyRemoteEnemies
     moonEnemies.forEach(e => {
         if (!e.sprite) return;
         const pdx = pos.x - e.x, pdz = pos.z - e.z;
@@ -3265,7 +3408,10 @@ function updateMimic(e, dt, pdx, pdz, pdist, now) {
                 // Hide sprite, show player mesh disguise
                 if (e.sprite) e.sprite.visible = false;
                 buildMimicDisguise(e, myColor, myName);
+                // Broadcast to all clients: mimic is now disguised as this player
                 db.ref('cd_moon_mimic').set({ mode:'disguise', color: myColor, name: myName, x: e.x, z: e.z });
+                // Also update the nametag text to definitely be the victim's username
+                if (e.disguiseTag) e.disguiseTag.innerText = myName;
             }
         }
 
@@ -3276,9 +3422,12 @@ function updateMimic(e, dt, pdx, pdz, pdist, now) {
             e.x += (pdx/len) * SPEED * 0.9 * dt;
             e.z += (pdz/len) * SPEED * 0.9 * dt;
         }
-        // Update disguise mesh + nametag position
+        // Update disguise mesh + nametag position, face player
         if (e.disguiseMesh) {
             e.disguiseMesh.position.set(e.x, getMoonTerrainY(e.x,e.z), e.z);
+            // Face the player
+            const faceAngle = Math.atan2(pdx, pdz);
+            e.disguiseMesh.rotation.y = faceAngle;
         }
         if (e.disguiseTag && activeCamera) {
             const wp = new THREE.Vector3(e.x, getMoonTerrainY(e.x,e.z)+75, e.z);
@@ -3355,9 +3504,9 @@ function applyMimicState(data) {
     }
     if (data.mode === 'disguise' && data.color) {
         mimic.disguiseColor = data.color;
-        mimic.disguiseName  = data.name || '???';
+        mimic.disguiseName  = data.name || mimicTarget || '???';
         if (mimic.sprite) mimic.sprite.visible = false;
-        buildMimicDisguise(mimic, data.color, data.name || mimicTarget || '???');
+        buildMimicDisguise(mimic, data.color, mimic.disguiseName);
     }
 }
 
