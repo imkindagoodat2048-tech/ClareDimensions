@@ -4145,50 +4145,58 @@ function buildPTRoom3() {
     pathStrip.position.set(0, 0.1, DOOR_Z / 2);
     ptScene.add(pathStrip);
 
-    // Flowers EVERYWHERE — dense carpet across the whole map
+    // Flowers — InstancedMesh: 1 draw call per color group, 20000 bouquets total
     const flowerColors = [0x9944cc, 0xcc44aa, 0xaa22ee, 0x7722bb, 0xff66dd, 0xdd33ff];
     const rng2 = seededRand(77);
 
-    // Use instanced meshes for performance: one for stems, one per flower color
-    const stemGeo = new THREE.CylinderGeometry(2.5, 2.5, 35, 4);
-    const stemMat = new THREE.MeshLambertMaterial({ color: 0x226622 });
-    const petalGeos = flowerColors.map(() => new THREE.SphereGeometry(10, 6, 6));
-    const petalMats = flowerColors.map(c => new THREE.MeshLambertMaterial({ color: c }));
-
-    const FLOWER_COUNT = 18000;
+    const FLOWER_COUNT = 20000;
     const SPREAD = PT_EVERPURPLE_SIZE * 1.6;
     const PATH_CLEAR = PATH_W / 2 + 40;
-    for (let i = 0; i < FLOWER_COUNT; i++) {
+
+    const stemGeo = new THREE.CylinderGeometry(2.5, 2.5, 1, 4); // unit height, scaled per instance
+    const stemMat = new THREE.MeshLambertMaterial({ color: 0x226622 });
+    const petalGeo = new THREE.SphereGeometry(10, 6, 5);
+
+    // Collect positions first (skip path)
+    const positions = [];
+    for (let i = 0; i < FLOWER_COUNT * 4; i++) { // oversample to hit target after skipping
         const fx = (rng2() - 0.5) * SPREAD;
         const fz = (rng2() - 0.5) * SPREAD;
-        // Skip flowers on the clear path corridor
         if (Math.abs(fx) < PATH_CLEAR && fz > -200 && fz < DOOR_Z + 100) continue;
-
-        // Bouquet of 3 stems sprouting from same base
-        for (let b = 0; b < 3; b++) {
-            const angle = (b / 3) * Math.PI * 2 + rng2() * 0.4;
-            const spread = 8 + rng2() * 10;
-            const bx = fx + Math.cos(angle) * spread;
-            const bz = fz + Math.sin(angle) * spread;
-            const h  = 28 + rng2() * 30;
-            const lean = (rng2() - 0.5) * 0.35;
-            const ci = Math.floor(rng2() * flowerColors.length);
-
-            const stem = new THREE.Mesh(stemGeo, stemMat);
-            stem.position.set(bx, h * 0.5, bz);
-            stem.scale.y = h / 35;
-            stem.rotation.z = lean;
-            ptScene.add(stem);
-
-            const petal = new THREE.Mesh(petalGeos[ci], petalMats[ci]);
-            petal.position.set(
-                bx + Math.sin(lean) * h * 0.5,
-                h + 6,
-                bz
-            );
-            ptScene.add(petal);
-        }
+        positions.push({ fx, fz, h: 28 + rng2() * 32, ci: Math.floor(rng2() * flowerColors.length) });
+        if (positions.length >= FLOWER_COUNT) break;
     }
+
+    // One InstancedMesh for all stems
+    const stemIM = new THREE.InstancedMesh(stemGeo, stemMat, positions.length);
+    stemIM.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+    const dummy = new THREE.Object3D();
+    positions.forEach(({ fx, fz, h }, idx) => {
+        dummy.position.set(fx, h * 0.5, fz);
+        dummy.scale.set(1, h, 1);
+        dummy.updateMatrix();
+        stemIM.setMatrixAt(idx, dummy.matrix);
+    });
+    stemIM.instanceMatrix.needsUpdate = true;
+    ptScene.add(stemIM);
+
+    // One InstancedMesh per petal color
+    const colorBuckets = flowerColors.map(() => []);
+    positions.forEach(({ fx, fz, h, ci }) => colorBuckets[ci].push({ fx, fz, h }));
+    flowerColors.forEach((color, ci) => {
+        const bucket = colorBuckets[ci];
+        if (!bucket.length) return;
+        const pIM = new THREE.InstancedMesh(petalGeo, new THREE.MeshLambertMaterial({ color }), bucket.length);
+        pIM.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+        bucket.forEach(({ fx, fz, h }, idx) => {
+            dummy.position.set(fx, h + 10, fz);
+            dummy.scale.set(1, 1, 1);
+            dummy.updateMatrix();
+            pIM.setMatrixAt(idx, dummy.matrix);
+        });
+        pIM.instanceMatrix.needsUpdate = true;
+        ptScene.add(pIM);
+    });
 
     // The empty door
     const doorMat = new THREE.MeshLambertMaterial({ color: 0x888888, side: THREE.DoubleSide });
