@@ -3894,7 +3894,9 @@ function buildPTRoom1() {
         new THREE.MeshBasicMaterial({ color: 0xffffee }));
     lightStrip.position.set(0, WALL_H-WALL_T/2-1, 0);
     ptScene.add(lightStrip);
-    ptScene.add(Object.assign(new THREE.PointLight(0xfff8e0, 1.2, 1200), { position: new THREE.Vector3(0, WALL_H-30, 0) }));
+    const ceilLight = new THREE.PointLight(0xfff8e0, 1.2, 1200);
+    ceilLight.position.set(0, WALL_H-30, 0);
+    ptScene.add(ceilLight);
 
     // ── Hollow plastic log (crawl-through sized) ──────────────────
     const logMat  = new THREE.MeshLambertMaterial({ color: 0xb85c18 });
