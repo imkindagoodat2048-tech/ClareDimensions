@@ -3926,6 +3926,46 @@ function buildPTRoom1() {
         ptScene.add(dot);
     });
 
+    // ── Pond (leads to The Decision when stepped in) ──────────────
+    const POND_X = 160, POND_Z = -100;
+    const POND_RX = 75, POND_RZ = 55;
+    // Stone rim around pond
+    const pondRimMat = new THREE.MeshLambertMaterial({ color: 0x778899 });
+    for (let a = 0; a < Math.PI*2; a += Math.PI/8) {
+        const ex = Math.cos(a)*POND_RX, ez = Math.sin(a)*POND_RZ;
+        const rb = new THREE.Mesh(new THREE.BoxGeometry(24, 14, 14), pondRimMat);
+        rb.position.set(POND_X+ex, 7, POND_Z+ez);
+        rb.rotation.y = a;
+        ptScene.add(rb);
+    }
+    // Pond water surface — dark teal, slightly transparent
+    const pondWaterMat = new THREE.MeshLambertMaterial({ color: 0x1a5f6e, transparent: true, opacity: 0.88 });
+    const pondWater = new THREE.Mesh(new THREE.CylinderGeometry(POND_RX-10, POND_RX-10, 3, 32), pondWaterMat);
+    pondWater.scale.z = POND_RZ / POND_RX;
+    pondWater.position.set(POND_X, 5, POND_Z);
+    ptScene.add(pondWater);
+    // Subtle ripple rings
+    for (let r = 0; r < 3; r++) {
+        const ring = new THREE.Mesh(
+            new THREE.TorusGeometry(20 + r*18, 1.2, 4, 28),
+            new THREE.MeshBasicMaterial({ color: 0x3a9cb0, transparent: true, opacity: 0.35 - r*0.09 })
+        );
+        ring.rotation.x = Math.PI/2;
+        ring.position.set(POND_X, 7.2, POND_Z);
+        ptScene.add(ring);
+    }
+    // A lily pad or two
+    [-18, 12].forEach((ox, i) => {
+        const lily = new THREE.Mesh(new THREE.CylinderGeometry(9+i*2, 9+i*2, 1.5, 8),
+            new THREE.MeshLambertMaterial({ color: 0x2d7a2d }));
+        lily.position.set(POND_X+ox, 7.5, POND_Z + (i===0?10:-8));
+        ptScene.add(lily);
+    });
+    // Store pond data for sinking check
+    ptScene.userData.pondCenter = { x: POND_X, z: POND_Z };
+    ptScene.userData.pondRX = POND_RX - 10;
+    ptScene.userData.pondRZ = POND_RZ - 10;
+
     // ── Exit door back to Hub — near spawn ───────────────────────
     // A simple wooden door frame at the back wall (behind spawn)
     const exitDoorMat = new THREE.MeshLambertMaterial({ color: 0x8b5e3c, emissive: 0x2a1a0a, emissiveIntensity: 0.2 });
@@ -3944,15 +3984,14 @@ function buildPTRoom1() {
     ptScene.userData.exitDoor = { x: 0, z: -HALF_D+10 };
 
     // ── Wall collision boxes (AABB) ───────────────────────────────
-    // Stored so checkPTPortals can enforce them
     ptScene.userData.wallBoxes = [
-        { minX: -HALF_W,      maxX: -HALF_W+WALL_T, minZ: -HALF_D, maxZ: HALF_D  }, // left
-        { minX:  HALF_W-WALL_T, maxX: HALF_W,        minZ: -HALF_D, maxZ: HALF_D  }, // right
-        { minX: -HALF_W,      maxX: HALF_W,          minZ: -HALF_D, maxZ: -HALF_D+WALL_T }, // back
-        { minX: -HALF_W,      maxX: HALF_W,          minZ:  HALF_D-WALL_T, maxZ: HALF_D  }, // front
+        { minX: -HALF_W,        maxX: -HALF_W+WALL_T, minZ: -HALF_D, maxZ: HALF_D   }, // left
+        { minX:  HALF_W-WALL_T, maxX:  HALF_W,        minZ: -HALF_D, maxZ: HALF_D   }, // right
+        { minX: -HALF_W,        maxX:  HALF_W,        minZ: -HALF_D, maxZ: -HALF_D+WALL_T }, // back
+        { minX: -HALF_W,        maxX:  HALF_W,        minZ:  HALF_D-WALL_T, maxZ: HALF_D  }, // front
     ];
-    // Keep the exit door gap in the back wall collision
-    // (gap: x in [-35, 35] at z = back wall)
+    ptScene.userData.halfW = HALF_W;
+    ptScene.userData.halfD = HALF_D;
     ptScene.userData.exitGap = { minX: -35, maxX: 35 };
 
     // ── Room bounds & sinking mechanic ───────────────────────────
@@ -3964,6 +4003,7 @@ function buildPTRoom1() {
     ptScene.userData.ballPitRadius = PIT_RX - 10;
     ptScene.userData.sinkY = 0;
     ptScene.userData.sunk  = false;
+    ptScene.userData.sinkDest = 2; // default sink destination
 
     ptScene.userData.onUpdate = (dt) => {
         if (ptScene.userData.sunk) return;
@@ -3971,12 +4011,19 @@ function buildPTRoom1() {
         const bpr = ptScene.userData.ballPitRadius;
         const dx2 = pos.x - bpc.x, dz2 = pos.z - bpc.z;
         const inPit = (dx2*dx2)/(bpr*bpr) + (dz2*dz2)/(bpr*bpr) < 1;
-        if (inPit) {
-            ptScene.userData.sinkY -= dt * 55;
+
+        const pnc = ptScene.userData.pondCenter;
+        const pnRX = ptScene.userData.pondRX, pnRZ = ptScene.userData.pondRZ;
+        const pdx = pos.x - pnc.x, pdz = pos.z - pnc.z;
+        const inPond = pnc && (pdx*pdx)/(pnRX*pnRX) + (pdz*pdz)/(pnRZ*pnRZ) < 1;
+
+        if (inPit || inPond) {
+            if (inPond) ptScene.userData.sinkDest = 2; // pond → The Decision
+            ptScene.userData.sinkY -= dt * (inPond ? 40 : 55); // pond sinks a bit slower
             pos.y = ptScene.userData.sinkY;
             if (pos.y < -140) {
                 ptScene.userData.sunk = true;
-                enterPTRoom(2);
+                enterPTRoom(ptScene.userData.sinkDest);
             }
         } else {
             ptScene.userData.sinkY = Math.min(0, ptScene.userData.sinkY + dt * 80);
@@ -4328,7 +4375,7 @@ function checkPTPortals() {
             const PR = 30; // player radius
             for (const box of ud.wallBoxes) {
                 // Back wall has an exit gap — skip collision in that gap
-                const isBackWall = (box.minZ < -ud.halfD + 5 && box.maxZ < -ud.halfD + ud.roomW);
+                const isBackWall = ud.halfD && (box.minZ < -ud.halfD + 5);
                 const inGap = isBackWall && ud.exitGap && pos.x > ud.exitGap.minX && pos.x < ud.exitGap.maxX;
                 if (inGap) continue;
                 if (pos.x > box.minX - PR && pos.x < box.maxX + PR &&
