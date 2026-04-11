@@ -1605,10 +1605,12 @@ function update(dt) {
         pos.x = newX; pos.z = newZ;
         pos.y = getMoonTerrainY(pos.x, pos.z);
     } else if (currentDim.startsWith('pt_')) {
-        // Plastic Terrace sub-rooms: clamp to a generous flat area
-        pos.x = Math.max(-PT_ROOM_SIZE, Math.min(PT_ROOM_SIZE, newX));
-        pos.z = Math.max(-PT_ROOM_SIZE, Math.min(PT_ROOM_SIZE, newZ));
-        // Only reset y to 0 in rooms other than room 1 — room 1 manages y for sinking
+        // Plastic Terrace sub-rooms: clamp based on which room we're in
+        const ptMoveLimit = ptRoom === 3 ? PT_EVERPURPLE_SIZE * 0.95
+                          : ptRoom === 4 ? 18000
+                          : PT_ROOM_SIZE;
+        pos.x = Math.max(-ptMoveLimit, Math.min(ptMoveLimit, newX));
+        pos.z = Math.max(-ptMoveLimit, Math.min(ptMoveLimit, newZ));
         if (ptRoom !== 1) pos.y = 0;
     } else {
         // Grasslands — clamp to terrain bounds
@@ -4161,17 +4163,31 @@ function buildPTRoom3() {
         const fz = (rng2() - 0.5) * SPREAD;
         // Skip flowers on the clear path corridor
         if (Math.abs(fx) < PATH_CLEAR && fz > -200 && fz < DOOR_Z + 100) continue;
-        const h  = 30 + rng2() * 35;
-        const ci = Math.floor(rng2() * flowerColors.length);
 
-        const stem = new THREE.Mesh(stemGeo, stemMat);
-        stem.position.set(fx, h * 0.5, fz);
-        stem.scale.y = h / 35;
-        ptScene.add(stem);
+        // Bouquet of 3 stems sprouting from same base
+        for (let b = 0; b < 3; b++) {
+            const angle = (b / 3) * Math.PI * 2 + rng2() * 0.4;
+            const spread = 8 + rng2() * 10;
+            const bx = fx + Math.cos(angle) * spread;
+            const bz = fz + Math.sin(angle) * spread;
+            const h  = 28 + rng2() * 30;
+            const lean = (rng2() - 0.5) * 0.35;
+            const ci = Math.floor(rng2() * flowerColors.length);
 
-        const petal = new THREE.Mesh(petalGeos[ci], petalMats[ci]);
-        petal.position.set(fx, h + 8, fz);
-        ptScene.add(petal);
+            const stem = new THREE.Mesh(stemGeo, stemMat);
+            stem.position.set(bx, h * 0.5, bz);
+            stem.scale.y = h / 35;
+            stem.rotation.z = lean;
+            ptScene.add(stem);
+
+            const petal = new THREE.Mesh(petalGeos[ci], petalMats[ci]);
+            petal.position.set(
+                bx + Math.sin(lean) * h * 0.5,
+                h + 6,
+                bz
+            );
+            ptScene.add(petal);
+        }
     }
 
     // The empty door
