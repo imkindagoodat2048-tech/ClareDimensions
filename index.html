@@ -4117,12 +4117,12 @@ function buildPTRoom2() {
 }
 
 // ── ROOM 3 — Everpurple Terrace ──────────────────────────────────
-const PT_EVERPURPLE_SIZE = 80000; // very large
+const PT_EVERPURPLE_SIZE = 40000; // half of original
 
 function buildPTRoom3() {
     document.getElementById('dim-label').innerText = '🌸 Everpurple Terrace';
     ptScene.background = new THREE.Color(0x5a2d82);
-    ptScene.fog = new THREE.FogExp2(0x3d1f5a, 0.00003);
+    ptScene.fog = new THREE.FogExp2(0x3d1f5a, 0.00006);
     ptScene.add(new THREE.AmbientLight(0xcc88ff, 0.7));
     ptScene.add(new THREE.DirectionalLight(0xdd99ff, 0.5));
 
@@ -4131,6 +4131,17 @@ function buildPTRoom3() {
         new THREE.MeshLambertMaterial({ color: 0x2d1040 }));
     ground.rotation.x = -Math.PI/2; ground.position.y = -0.5;
     ptScene.add(ground);
+
+    // Clear path straight to the door — slightly lighter ground strip
+    const DOOR_Z = PT_EVERPURPLE_SIZE * 0.65;
+    const PATH_W = 320;
+    const pathStrip = new THREE.Mesh(
+        new THREE.PlaneGeometry(PATH_W, DOOR_Z + 300),
+        new THREE.MeshLambertMaterial({ color: 0x3d1a58 })
+    );
+    pathStrip.rotation.x = -Math.PI/2;
+    pathStrip.position.set(0, 0.1, DOOR_Z / 2);
+    ptScene.add(pathStrip);
 
     // Flowers EVERYWHERE — dense carpet across the whole map
     const flowerColors = [0x9944cc, 0xcc44aa, 0xaa22ee, 0x7722bb, 0xff66dd, 0xdd33ff];
@@ -4144,9 +4155,12 @@ function buildPTRoom3() {
 
     const FLOWER_COUNT = 18000;
     const SPREAD = PT_EVERPURPLE_SIZE * 1.6;
+    const PATH_CLEAR = PATH_W / 2 + 40;
     for (let i = 0; i < FLOWER_COUNT; i++) {
         const fx = (rng2() - 0.5) * SPREAD;
         const fz = (rng2() - 0.5) * SPREAD;
+        // Skip flowers on the clear path corridor
+        if (Math.abs(fx) < PATH_CLEAR && fz > -200 && fz < DOOR_Z + 100) continue;
         const h  = 30 + rng2() * 35;
         const ci = Math.floor(rng2() * flowerColors.length);
 
@@ -4160,8 +4174,7 @@ function buildPTRoom3() {
         ptScene.add(petal);
     }
 
-    // The empty door — very far away on the +Z axis
-    const DOOR_Z = PT_EVERPURPLE_SIZE * 0.65;
+    // The empty door
     const doorMat = new THREE.MeshLambertMaterial({ color: 0x888888, side: THREE.DoubleSide });
     const doorFrame = new THREE.Mesh(new THREE.BoxGeometry(180, 300, 18), doorMat);
     doorFrame.position.set(0, 150, DOOR_Z);
