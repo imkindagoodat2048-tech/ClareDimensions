@@ -4132,18 +4132,32 @@ function buildPTRoom3() {
     ground.rotation.x = -Math.PI/2; ground.position.y = -0.5;
     ptScene.add(ground);
 
-    // Flowers everywhere — no collision, dense
-    const flowerColors = [0x9944cc, 0xcc44aa, 0xaa22ee, 0x7722bb];
+    // Flowers EVERYWHERE — dense carpet across the whole map
+    const flowerColors = [0x9944cc, 0xcc44aa, 0xaa22ee, 0x7722bb, 0xff66dd, 0xdd33ff];
     const rng2 = seededRand(77);
-    for (let i = 0; i < 2400; i++) {
-        const fx = (rng2()-0.5)*PT_EVERPURPLE_SIZE*1.8;
-        const fz = (rng2()-0.5)*PT_EVERPURPLE_SIZE*1.8;
-        const stem = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 40+rng2()*30, 5),
-            new THREE.MeshLambertMaterial({ color: 0x226622 }));
-        stem.position.set(fx, 20, fz); ptScene.add(stem);
-        const petal = new THREE.Mesh(new THREE.SphereGeometry(12+rng2()*10, 7, 7),
-            new THREE.MeshLambertMaterial({ color: flowerColors[Math.floor(rng2()*4)] }));
-        petal.position.set(fx, 50+rng2()*20, fz); ptScene.add(petal);
+
+    // Use instanced meshes for performance: one for stems, one per flower color
+    const stemGeo = new THREE.CylinderGeometry(2.5, 2.5, 35, 4);
+    const stemMat = new THREE.MeshLambertMaterial({ color: 0x226622 });
+    const petalGeos = flowerColors.map(() => new THREE.SphereGeometry(10, 6, 6));
+    const petalMats = flowerColors.map(c => new THREE.MeshLambertMaterial({ color: c }));
+
+    const FLOWER_COUNT = 18000;
+    const SPREAD = PT_EVERPURPLE_SIZE * 1.6;
+    for (let i = 0; i < FLOWER_COUNT; i++) {
+        const fx = (rng2() - 0.5) * SPREAD;
+        const fz = (rng2() - 0.5) * SPREAD;
+        const h  = 30 + rng2() * 35;
+        const ci = Math.floor(rng2() * flowerColors.length);
+
+        const stem = new THREE.Mesh(stemGeo, stemMat);
+        stem.position.set(fx, h * 0.5, fz);
+        stem.scale.y = h / 35;
+        ptScene.add(stem);
+
+        const petal = new THREE.Mesh(petalGeos[ci], petalMats[ci]);
+        petal.position.set(fx, h + 8, fz);
+        ptScene.add(petal);
     }
 
     // The empty door — very far away on the +Z axis
@@ -4158,7 +4172,9 @@ function buildPTRoom3() {
     doorOpen.position.set(0, 150, DOOR_Z-9);
     ptScene.add(doorOpen);
     // Glow
-    ptScene.add(Object.assign(new THREE.PointLight(0xcc88ff, 1.5, 3000), { position: new THREE.Vector3(0, 200, DOOR_Z) }));
+    const doorGlow = new THREE.PointLight(0xcc88ff, 1.5, 3000);
+    doorGlow.position.set(0, 200, DOOR_Z);
+    ptScene.add(doorGlow);
 
     ptScene.userData.everpurpleDoorZ = DOOR_Z;
     ptScene.userData.onUpdate = () => {
