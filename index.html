@@ -427,6 +427,18 @@ function launchGame(username, color, pfp, adminFlag) {
 
 function leaveGame() { if (myRef) myRef.remove(); location.reload(); }
 
+// ── Remove player on tab close / navigate away ──
+window.addEventListener('beforeunload', () => { if (myRef) myRef.remove(); });
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && myRef) myRef.remove();
+    // Re-register if tab comes back visible and we're still in-game
+    if (document.visibilityState === 'visible' && myId && !myRef) {
+        myRef = db.ref('cd_players/' + myId);
+        myRef.set({ name: myName, color: myColor, pfp: myPfp, isAdmin, x: pos.x, y: pos.y, z: pos.z, yaw, dim: currentDim });
+        myRef.onDisconnect().remove();
+    }
+});
+
 // ════════════════════════════════════════════════
 // RENDERER — shared single WebGL renderer
 // ════════════════════════════════════════════════
@@ -535,9 +547,10 @@ function makeSquareMesh(hexColor) {
 // ════════════════════════════════════════════════
 let hubScene, hubCamera;
 const PORTALS = [
-    { id: 'grasslands', label: '🌿 Grasslands',       color: 0x2ed573, angle: 0,           locked: false },
-    { id: 'ghosttown',  label: '🏚️ Ghost Town',        color: 0xd4a96a, angle: Math.PI*2/3, locked: false },
-    { id: 'moon',       label: '🌕 Moon',               color: 0xccccaa, angle: Math.PI*4/3, locked: false },
+    { id: 'grasslands',     label: '🌿 Grasslands',       color: 0x2ed573, angle: 0,               locked: false },
+    { id: 'ghosttown',      label: '🏚️ Ghost Town',        color: 0xd4a96a, angle: Math.PI*2/3,     locked: false },
+    { id: 'moon',           label: '🌕 Moon',               color: 0xccccaa, angle: Math.PI*4/3,     locked: false },
+    { id: 'plasticterrace', label: '🧸 Plastic Terrace',   color: 0xff79c6, angle: Math.PI,         locked: false },
 ];
 const PORTAL_DIST = 220;
 const ENTER_DIST  = 90;
@@ -1453,6 +1466,7 @@ function checkPortals() {
                     if (nearest.data.id === 'grasslands') enterGrasslands();
                     else if (nearest.data.id === 'ghosttown') enterGhostTown();
                     else if (nearest.data.id === 'moon') enterMoon();
+                    else if (nearest.data.id === 'plasticterrace') enterPlasticTerrace();
                 }
             }
         } else {
@@ -1474,6 +1488,8 @@ function checkPortals() {
         checkGTDoors();
     } else if (currentDim === 'moon') {
         checkMoonPortal();
+    } else if (currentDim.startsWith('pt_')) {
+        checkPTPortals();
     }
 }
 
@@ -1559,6 +1575,11 @@ function update(dt) {
         newZ = Math.max(-MOON_SIZE+50, Math.min(MOON_SIZE-50, newZ));
         pos.x = newX; pos.z = newZ;
         pos.y = getMoonTerrainY(pos.x, pos.z);
+    } else if (currentDim.startsWith('pt_')) {
+        // Plastic Terrace sub-rooms: clamp to a generous flat area
+        pos.x = Math.max(-PT_ROOM_SIZE, Math.min(PT_ROOM_SIZE, newX));
+        pos.z = Math.max(-PT_ROOM_SIZE, Math.min(PT_ROOM_SIZE, newZ));
+        pos.y = 0;
     } else {
         // Grasslands — clamp to terrain bounds
         newX = Math.max(-G_SIZE + 50, Math.min(G_SIZE - 50, newX));
@@ -2851,6 +2872,7 @@ function loop() {
     requestAnimationFrame(loop);
     const dt = Math.min(clock3.getDelta(), 0.05);
     update(dt);
+    if (currentDim.startsWith('pt_')) updatePT();
     if (activeScene && activeCamera) renderer.render(activeScene, activeCamera);
 }
 
@@ -3501,22 +3523,41 @@ function buildMimicDisguise(e, color, name) {
     if (e.disguiseMesh) { moonScene.remove(e.disguiseMesh); e.disguiseMesh = null; }
     if (e.disguiseTag)  { e.disguiseTag.remove(); e.disguiseTag = null; }
 
-    const hexColor = new THREE.Color(color).getHex();
+    // Parse color string into a Three hex int
+    const threeColor = new THREE.Color(color);
+    const hexColor = threeColor.getHex();
     const mesh = makeSquareMesh(hexColor);
 
-    // Add a creepy half-circle smile using a torus arc
+    // ── Smiley face overlay ──
+    // Remove the default black eyes added by makeSquareMesh (they're on the mesh group as children 0 & 1)
+    // Actually makeSquareMesh puts eyes at positions [-5,44,-11] and [5,44,-11] — we keep those.
+    // Add a curved smile using a torus arc
     const smileMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
-    const smileGeo = new THREE.TorusGeometry(5, 1.2, 4, 8, Math.PI);
+
+    // Wide smile arc (half-torus facing down = smile)
+    const smileGeo = new THREE.TorusGeometry(6, 1.4, 6, 12, Math.PI);
     const smile = new THREE.Mesh(smileGeo, smileMat);
-    smile.position.set(0, 40, -11); // on face
-    smile.rotation.z = Math.PI; // arc faces down = smile
+    smile.position.set(0, 37, -11); // lower on face than eyes
+    smile.rotation.z = Math.PI;    // arc opens downward = :)
     mesh.add(smile);
+
+    // Bright white sclera eyes (wider, over the standard black eyes)
+    const scleraMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    [-5, 5].forEach(ex => {
+        const sclera = new THREE.Mesh(new THREE.BoxGeometry(5, 5, 2), scleraMat);
+        sclera.position.set(ex, 44, -11.5);
+        mesh.add(sclera);
+        // Black pupil dot on top
+        const pupil = new THREE.Mesh(new THREE.BoxGeometry(2.5, 2.5, 2), smileMat);
+        pupil.position.set(ex, 44, -12.5);
+        mesh.add(pupil);
+    });
 
     mesh.position.set(e.x, getMoonTerrainY(e.x, e.z), e.z);
     moonScene.add(mesh);
     e.disguiseMesh = mesh;
 
-    // Nametag
+    // Nametag — styled exactly like real player nametags
     const tag = document.createElement('div');
     tag.style.cssText = `position:fixed;pointer-events:none;z-index:40;
         background:rgba(15,15,26,0.85);border:1px solid var(--primary);
@@ -3578,6 +3619,722 @@ function dealMoonDmg(amount, msg) {
         showPetNotif('You died on the Moon... returning to Hub.');
         setTimeout(()=>{ playerHP_moon=100; exitMoon(); }, 2500);
     }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// PLASTIC TERRACE — dreamlike multi-room dimension
+// ════════════════════════════════════════════════════════════════════
+
+const PT_ROOM_SIZE = 2000; // movement clamp half-size
+
+// ── State ─────────────────────────────────────────────────────────
+let ptScene = null, ptCamera = null;
+let ptRoom = 0; // current room index
+let ptRoomEnteredAt = 0;
+let ptTextTimeout = null;
+let ptTransporting = false;
+let ptOverlay = null; // the full-screen text/fade overlay div
+let ptEverPurpleDir = null; // random walk direction for Route 2
+
+// ── Overlay helper ────────────────────────────────────────────────
+function ptShowOverlay(text, color, fadeOutAfter, onFadeOut) {
+    if (!ptOverlay) {
+        ptOverlay = document.createElement('div');
+        ptOverlay.style.cssText = `
+            position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+            pointer-events:none;z-index:9500;transition:opacity 1.2s ease;
+            font-family:'Courier New',monospace;font-size:22px;letter-spacing:0.12em;
+            text-shadow:0 0 18px currentColor;text-align:center;`;
+        document.body.appendChild(ptOverlay);
+    }
+    ptOverlay.style.background = 'transparent';
+    ptOverlay.style.color = color || 'white';
+    ptOverlay.style.opacity = '0';
+    ptOverlay.innerText = text;
+    requestAnimationFrame(() => { ptOverlay.style.opacity = '1'; });
+    if (fadeOutAfter > 0) {
+        setTimeout(() => {
+            ptOverlay.style.opacity = '0';
+            if (onFadeOut) setTimeout(onFadeOut, 1200);
+        }, fadeOutAfter);
+    }
+}
+
+function ptFadeToBlack(dur, cb) {
+    if (!ptOverlay) {
+        ptOverlay = document.createElement('div');
+        ptOverlay.style.cssText = `position:fixed;inset:0;pointer-events:none;z-index:9500;
+            transition:opacity ${dur/1000}s ease;background:black;`;
+        document.body.appendChild(ptOverlay);
+    }
+    ptOverlay.style.background = 'black';
+    ptOverlay.style.color = 'transparent';
+    ptOverlay.innerText = '';
+    ptOverlay.style.opacity = '0';
+    ptOverlay.style.transition = `opacity ${dur/1000}s ease`;
+    requestAnimationFrame(() => { ptOverlay.style.opacity = '1'; });
+    setTimeout(cb, dur);
+}
+
+function ptClearOverlay() {
+    if (ptOverlay) { ptOverlay.style.opacity = '0'; ptOverlay.innerText = ''; }
+}
+
+// ── Enter Plastic Terrace ─────────────────────────────────────────
+function enterPlasticTerrace() {
+    enterPTRoom(1); // start at Room 1: The Playcenter
+}
+
+function enterPTRoom(room) {
+    if (ptTransporting) return;
+    ptTransporting = true;
+
+    ptFadeToBlack(600, () => {
+        _buildPTRoom(room);
+        ptTransporting = false;
+        // Fade back in
+        setTimeout(() => { if (ptOverlay) { ptOverlay.style.opacity = '0'; } }, 300);
+    });
+}
+
+function _buildPTRoom(room) {
+    ptRoom = room;
+    ptRoomEnteredAt = Date.now();
+    ptClearOverlay();
+    if (ptTextTimeout) { clearTimeout(ptTextTimeout); ptTextTimeout = null; }
+    ptEverPurpleDir = null;
+
+    // Tear down old scene if any
+    if (ptScene) {
+        while (ptScene.children.length) ptScene.remove(ptScene.children[0]);
+    } else {
+        ptScene = new THREE.Scene();
+        ptCamera = makeCamera();
+    }
+
+    // Update dim label
+    currentDim = 'pt_' + room;
+    document.getElementById('dim-label').style.display = 'block';
+
+    // Reset position
+    pos.x = 0; pos.z = 0; pos.y = 0;
+    ptCamera.position.set(0, EYE_H, 0);
+    activeScene  = ptScene;
+    activeCamera = ptCamera;
+    activeCamera.far = 30000;
+    activeCamera.updateProjectionMatrix();
+
+    if (room === 0) buildPTRoom0();
+    else if (room === 1) buildPTRoom1();
+    else if (room === 2) buildPTRoom2();
+    else if (room === 3) buildPTRoom3();
+    else if (room === 4) buildPTRoom4();
+    else if (room === 5) buildPTRoom5();
+    else if (room === 6) buildPTRoom6();
+    else if (room === 7) buildPTRoom7();
+}
+
+// ── Shared scene helpers ───────────────────────────────────────────
+function ptFloor(color, size) {
+    const f = new THREE.Mesh(
+        new THREE.PlaneGeometry(size*2, size*2),
+        new THREE.MeshLambertMaterial({ color })
+    );
+    f.rotation.x = -Math.PI/2; f.position.y = -0.5;
+    ptScene.add(f);
+}
+
+function ptWallBox(w, h, d, x, y, z, color) {
+    const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(w, h, d),
+        new THREE.MeshLambertMaterial({ color })
+    );
+    mesh.position.set(x, y, z);
+    ptScene.add(mesh);
+    return mesh;
+}
+
+// ── ROOM 0 — Your End ────────────────────────────────────────────
+function buildPTRoom0() {
+    document.getElementById('dim-label').innerText = '🕊️ Your End';
+    ptScene.background = new THREE.Color(0xffffff);
+    ptScene.add(new THREE.AmbientLight(0xffffff, 2.0));
+    // Pure white void — no floor, no walls, just light
+    ptFloor(0xffffff, 20000);
+
+    // 10 seconds in: show text, then after 5 seconds transport back to lobby
+    ptTextTimeout = setTimeout(() => {
+        ptShowOverlay('This is your end.', '#222222', 5000, () => {
+            exitPlasticTerrace();
+        });
+    }, 10000);
+}
+
+// ── ROOM 1 — The Playcenter ──────────────────────────────────────
+function buildPTRoom1() {
+    document.getElementById('dim-label').innerText = '🧸 The Playcenter';
+
+    // Painted field walls — sky blue ceiling, grassy walls
+    ptScene.background = new THREE.Color(0x9ad4f5);
+    ptScene.add(new THREE.AmbientLight(0xffffff, 0.9));
+    ptScene.add(new THREE.DirectionalLight(0xfff0cc, 0.6));
+
+    const ROOM_W = 1200, ROOM_D = 1200, WALL_H = 700;
+    const wallMats = {
+        grass: new THREE.MeshLambertMaterial({ color: 0x4fc053 }),
+        sky:   new THREE.MeshLambertMaterial({ color: 0x9ad4f5 }),
+    };
+
+    // Floor — soft green
+    ptFloor(0x5cb85c, PT_ROOM_SIZE);
+
+    // Painted walls (4 sides + ceiling) — the "field" illusion
+    // Back wall (z = -D/2)
+    const backWall = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_W, WALL_H), wallMats.grass);
+    backWall.position.set(0, WALL_H/2, -ROOM_D/2);
+    ptScene.add(backWall);
+
+    // Front wall
+    const frontWall = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_W, WALL_H), wallMats.grass.clone());
+    frontWall.rotation.y = Math.PI; frontWall.position.set(0, WALL_H/2, ROOM_D/2);
+    ptScene.add(frontWall);
+
+    // Left wall
+    const leftWall = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_D, WALL_H), wallMats.grass.clone());
+    leftWall.rotation.y = Math.PI/2; leftWall.position.set(-ROOM_W/2, WALL_H/2, 0);
+    ptScene.add(leftWall);
+
+    // Right wall
+    const rightWall = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_D, WALL_H), wallMats.grass.clone());
+    rightWall.rotation.y = -Math.PI/2; rightWall.position.set(ROOM_W/2, WALL_H/2, 0);
+    ptScene.add(rightWall);
+
+    // Ceiling
+    const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_W, ROOM_D), wallMats.sky.clone());
+    ceiling.rotation.x = Math.PI/2; ceiling.position.y = WALL_H;
+    ptScene.add(ceiling);
+
+    // Add some "tree" bumps on the walls using boxes (painted look)
+    [-400, 0, 350].forEach(bx => {
+        const trunk = ptWallBox(60, 200, 30, bx, 100, -ROOM_D/2+15, 0x7a5230);
+        const leaves = ptWallBox(180, 200, 30, bx, 280, -ROOM_D/2+15, 0x2d7a2d);
+    });
+
+    // Hollow plastic log — walkable tunnel (no collision, just visual)
+    const logMat = new THREE.MeshLambertMaterial({ color: 0xc06820 });
+    const logOuter = new THREE.Mesh(new THREE.CylinderGeometry(130, 140, 500, 16), logMat);
+    logOuter.rotation.z = Math.PI/2; logOuter.position.set(350, 130, -100);
+    ptScene.add(logOuter);
+    // Hollow inside (darker)
+    const logInner = new THREE.Mesh(new THREE.CylinderGeometry(115, 115, 510, 16),
+        new THREE.MeshLambertMaterial({ color: 0x5a2800, side: THREE.BackSide }));
+    logInner.rotation.z = Math.PI/2; logInner.position.set(350, 130, -100);
+    ptScene.add(logInner);
+
+    // Stone arch near the log
+    const stoneMat = new THREE.MeshLambertMaterial({ color: 0x888899 });
+    const archBase1 = ptWallBox(60, 200, 60, 180, 100, -120, 0x888899);
+    const archBase2 = ptWallBox(60, 200, 60, 300, 100, -120, 0x888899);
+    const archTop   = ptWallBox(180, 55, 60, 240, 205, -120, 0x888899);
+
+    // Ball pit — shallow oval pool, stone-edged, blue "water"
+    const pitEdgeMat = new THREE.MeshLambertMaterial({ color: 0x888899 });
+    // Oval using a ring of boxes
+    for (let a = 0; a < Math.PI*2; a += Math.PI/8) {
+        const ex = Math.cos(a)*250, ez = Math.sin(a)*140;
+        const edgeBox = new THREE.Mesh(new THREE.BoxGeometry(70, 40, 40), pitEdgeMat);
+        edgeBox.position.set(ex - 100, 20, ez + 400);
+        edgeBox.rotation.y = a;
+        ptScene.add(edgeBox);
+    }
+    // Water fill
+    const waterMat = new THREE.MeshLambertMaterial({ color: 0x1a8fc1, transparent: true, opacity: 0.85 });
+    const water = new THREE.Mesh(new THREE.CylinderGeometry(220, 220, 5, 32), waterMat);
+    water.position.set(-100, 18, 400);
+    ptScene.add(water);
+
+    // Ladybugs (red spheres with black dots on the pit edges)
+    [-80, -120].forEach((ox) => {
+        const lb = new THREE.Mesh(new THREE.SphereGeometry(20, 8, 8),
+            new THREE.MeshLambertMaterial({ color: 0xdd2222 }));
+        lb.position.set(-100+ox, 42, 560);
+        ptScene.add(lb);
+        const dot = new THREE.Mesh(new THREE.SphereGeometry(6, 6, 6),
+            new THREE.MeshLambertMaterial({ color: 0x111111 }));
+        dot.position.set(-100+ox, 62, 557);
+        ptScene.add(dot);
+    });
+
+    // Stump seat
+    const stump = new THREE.Mesh(new THREE.CylinderGeometry(55, 65, 70, 12),
+        new THREE.MeshLambertMaterial({ color: 0xa0632a }));
+    stump.position.set(130, 35, -50);
+    ptScene.add(stump);
+
+    // Clamp player to room bounds
+    ptScene.userData.roomW = ROOM_W;
+    ptScene.userData.roomD = ROOM_D;
+
+    // ── Sinking mechanic ─────────────────────────────────────────
+    ptScene.userData.ballPitCenter = { x: -100, z: 400 };
+    ptScene.userData.ballPitRadius = 210;
+    ptScene.userData.sinkY = 0;
+    ptScene.userData.sunk = false;
+
+    // Animate sinking & check for room 2 transfer
+    ptScene.userData.onUpdate = (dt) => {
+        if (ptScene.userData.sunk) return;
+        const bpc = ptScene.userData.ballPitCenter;
+        const bpr = ptScene.userData.ballPitRadius;
+        const dx2 = pos.x - bpc.x, dz2 = pos.z - bpc.z;
+        const inPit = Math.sqrt(dx2*dx2+dz2*dz2) < bpr;
+        if (inPit) {
+            ptScene.userData.sinkY -= dt * 60; // sink speed
+            pos.y = ptScene.userData.sinkY;
+            if (pos.y < -160) {
+                // Fell in — go to Room 2
+                ptScene.userData.sunk = true;
+                enterPTRoom(2);
+            }
+        } else {
+            ptScene.userData.sinkY = Math.min(0, ptScene.userData.sinkY + dt * 80); // float back up
+            pos.y = ptScene.userData.sinkY;
+        }
+    };
+}
+
+// ── ROOM 2 — The Decision ─────────────────────────────────────────
+function buildPTRoom2() {
+    document.getElementById('dim-label').innerText = '🚪 The Decision';
+    ptScene.background = new THREE.Color(0xe8d8b4);
+    ptScene.add(new THREE.AmbientLight(0xfff5e0, 1.1));
+    ptScene.add(new THREE.DirectionalLight(0xffeecc, 0.5));
+
+    // Tan walls
+    const W = 900, H = 500, D = 700;
+    ptFloor(0xc8a97a, PT_ROOM_SIZE);
+    // Wooden floor planks (darker strips)
+    for (let i = -5; i <= 5; i++) {
+        const plank = new THREE.Mesh(new THREE.PlaneGeometry(80, D*2),
+            new THREE.MeshLambertMaterial({ color: i%2===0 ? 0x7a4f2a : 0x8a5e35 }));
+        plank.rotation.x = -Math.PI/2; plank.position.set(i*90, 0.1, 0);
+        ptScene.add(plank);
+    }
+    // Walls
+    [[0, H/2, -D/2, 0], [0, H/2, D/2, Math.PI], [-W/2, H/2, 0, Math.PI/2], [W/2, H/2, 0, -Math.PI/2]].forEach(([x,y,z,ry]) => {
+        const wall = new THREE.Mesh(new THREE.PlaneGeometry(W, H),
+            new THREE.MeshLambertMaterial({ color: 0xd9c49a }));
+        wall.rotation.y = ry; wall.position.set(x, y, z); ptScene.add(wall);
+    });
+
+    // Red door (Nightmare Terrace → Everpurple Terrace)
+    const redDoorMat = new THREE.MeshLambertMaterial({ color: 0xcc2222, emissive: 0x440000, emissiveIntensity: 0.3 });
+    const redFrame = new THREE.Mesh(new THREE.BoxGeometry(120, 220, 25), redDoorMat);
+    redFrame.position.set(-220, 110, -D/2+12);
+    ptScene.add(redFrame);
+    // Paint "NIGHTMARE TERRACE" on it as a subtle emissive box
+    const redText = new THREE.Mesh(new THREE.BoxGeometry(100, 30, 5),
+        new THREE.MeshBasicMaterial({ color: 0xff4444 }));
+    redText.position.set(-220, 130, -D/2+25); ptScene.add(redText);
+
+    // Blue door (Thorns → Blind Future)
+    const blueDoorMat = new THREE.MeshLambertMaterial({ color: 0x2255cc, emissive: 0x002244, emissiveIntensity: 0.3 });
+    const blueFrame = new THREE.Mesh(new THREE.BoxGeometry(120, 220, 25), blueDoorMat);
+    blueFrame.position.set(220, 110, -D/2+12);
+    ptScene.add(blueFrame);
+    const blueText = new THREE.Mesh(new THREE.BoxGeometry(100, 30, 5),
+        new THREE.MeshBasicMaterial({ color: 0x4488ff }));
+    blueText.position.set(220, 130, -D/2+25); ptScene.add(blueText);
+
+    ptScene.userData.doors = [
+        { x: -220, z: -D/2+12, dest: 3, label: '[ E ] Enter NIGHTMARE TERRACE', color: '#ff6666' },
+        { x:  220, z: -D/2+12, dest: 4, label: '[ E ] Enter THORNS', color: '#6688ff' },
+    ];
+
+    ptScene.userData.onUpdate = () => {};
+}
+
+// ── ROOM 3 — Everpurple Terrace ──────────────────────────────────
+const PT_EVERPURPLE_SIZE = 80000; // very large
+
+function buildPTRoom3() {
+    document.getElementById('dim-label').innerText = '🌸 Everpurple Terrace';
+    ptScene.background = new THREE.Color(0x5a2d82);
+    ptScene.fog = new THREE.FogExp2(0x3d1f5a, 0.00003);
+    ptScene.add(new THREE.AmbientLight(0xcc88ff, 0.7));
+    ptScene.add(new THREE.DirectionalLight(0xdd99ff, 0.5));
+
+    // Ground — deep purple
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(PT_EVERPURPLE_SIZE*2, PT_EVERPURPLE_SIZE*2),
+        new THREE.MeshLambertMaterial({ color: 0x2d1040 }));
+    ground.rotation.x = -Math.PI/2; ground.position.y = -0.5;
+    ptScene.add(ground);
+
+    // Flowers everywhere — no collision, dense
+    const flowerColors = [0x9944cc, 0xcc44aa, 0xaa22ee, 0x7722bb];
+    const rng2 = seededRand(77);
+    for (let i = 0; i < 2400; i++) {
+        const fx = (rng2()-0.5)*PT_EVERPURPLE_SIZE*1.8;
+        const fz = (rng2()-0.5)*PT_EVERPURPLE_SIZE*1.8;
+        const stem = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 40+rng2()*30, 5),
+            new THREE.MeshLambertMaterial({ color: 0x226622 }));
+        stem.position.set(fx, 20, fz); ptScene.add(stem);
+        const petal = new THREE.Mesh(new THREE.SphereGeometry(12+rng2()*10, 7, 7),
+            new THREE.MeshLambertMaterial({ color: flowerColors[Math.floor(rng2()*4)] }));
+        petal.position.set(fx, 50+rng2()*20, fz); ptScene.add(petal);
+    }
+
+    // The empty door — very far away on the +Z axis
+    const DOOR_Z = PT_EVERPURPLE_SIZE * 0.65;
+    const doorMat = new THREE.MeshLambertMaterial({ color: 0x888888, side: THREE.DoubleSide });
+    const doorFrame = new THREE.Mesh(new THREE.BoxGeometry(180, 300, 18), doorMat);
+    doorFrame.position.set(0, 150, DOOR_Z);
+    ptScene.add(doorFrame);
+    // The "empty" door opening (darker)
+    const doorOpen = new THREE.Mesh(new THREE.PlaneGeometry(150, 270),
+        new THREE.MeshBasicMaterial({ color: 0x111111, side: THREE.DoubleSide }));
+    doorOpen.position.set(0, 150, DOOR_Z-9);
+    ptScene.add(doorOpen);
+    // Glow
+    ptScene.add(Object.assign(new THREE.PointLight(0xcc88ff, 1.5, 3000), { position: new THREE.Vector3(0, 200, DOOR_Z) }));
+
+    ptScene.userData.everpurpleDoorZ = DOOR_Z;
+    ptScene.userData.onUpdate = () => {
+        // Check if player hits the map border → Lost 404
+        if (!ptEverPurpleDir) return;
+        const d = Math.sqrt(pos.x*pos.x + pos.z*pos.z);
+        if (d > PT_EVERPURPLE_SIZE * 0.92) {
+            ptEverPurpleDir = null;
+            // Screen goes black, purple text, then → Lost 404
+            ptFadeToBlack(800, () => {
+                if (ptOverlay) {
+                    ptOverlay.style.background = 'transparent';
+                    ptOverlay.style.color = '#cc44ee';
+                    ptOverlay.style.opacity = '0';
+                    ptOverlay.innerText = 'Are you lost?';
+                    ptOverlay.style.transition = 'opacity 1s ease';
+                    requestAnimationFrame(() => { ptOverlay.style.opacity = '1'; });
+                }
+                setTimeout(() => { enterPTRoom(7); }, 5000);
+            });
+        }
+    };
+}
+
+// ── ROOM 4 — Blind Future (Thorns) ───────────────────────────────
+function buildPTRoom4() {
+    document.getElementById('dim-label').innerText = '🌫️ Blind Future';
+    const GT_LIKE = 18000;
+
+    ptScene.background = new THREE.Color(0xb0a898);
+    ptScene.fog = new THREE.FogExp2(0xb0a898, 0.00018);
+    ptScene.add(new THREE.AmbientLight(0xccbbaa, 0.6));
+    ptScene.add(new THREE.DirectionalLight(0xfff5e0, 0.4));
+
+    // Barren grey-tan ground
+    ptFloor(0xa09080, 60000);
+
+    // Thorns: vary from house-sized to tiny, scattered, none at origin
+    const rng3 = seededRand(42);
+    const thornMat = new THREE.MeshLambertMaterial({ color: 0x888880 });
+    const bigThornMat = new THREE.MeshLambertMaterial({ color: 0x6a6460 });
+
+    for (let i = 0; i < 200; i++) {
+        const angle = rng3() * Math.PI * 2;
+        const dist  = 600 + rng3() * 14000;
+        const tx = Math.cos(angle)*dist, tz = Math.sin(angle)*dist;
+
+        // Size varies: large house (h ~400-700) down to half-player (~30)
+        const h = 30 + rng3() * 670;
+        const baseR = h * 0.08;
+        const mat = h > 300 ? bigThornMat : thornMat;
+
+        // Cone-like thorn — ConeGeometry(baseRadius, height, sides)
+        const thorn = new THREE.Mesh(new THREE.ConeGeometry(baseR, h, 5), mat);
+        thorn.position.set(tx, h/2, tz);
+        // Slight random tilt
+        thorn.rotation.z = (rng3()-0.5)*0.3;
+        thorn.rotation.x = (rng3()-0.5)*0.15;
+        ptScene.add(thorn);
+    }
+
+    // Sign at spawn
+    const signPost = new THREE.Mesh(new THREE.BoxGeometry(12, 200, 12),
+        new THREE.MeshLambertMaterial({ color: 0x6a5040 }));
+    signPost.position.set(0, 100, -300); ptScene.add(signPost);
+    const signBoard = new THREE.Mesh(new THREE.BoxGeometry(350, 100, 16),
+        new THREE.MeshLambertMaterial({ color: 0x8a7060 }));
+    signBoard.position.set(0, 220, -300); ptScene.add(signBoard);
+
+    // 2 minutes after entering, fade to black → Room 0
+    ptScene.userData.onUpdate = () => {
+        const elapsed = Date.now() - ptRoomEnteredAt;
+        if (elapsed > 120000 && !ptTransporting) {
+            ptTransporting = true;
+            ptFadeToBlack(3000, () => { ptTransporting=false; _buildPTRoom(0); });
+        }
+    };
+}
+
+// ── ROOM 5 — Cubicle Farm ────────────────────────────────────────
+let ptComputersOn = [];
+
+function buildPTRoom5() {
+    document.getElementById('dim-label').innerText = '🖥️ Cubicle Farm';
+    ptScene.background = new THREE.Color(0xd4d0c8);
+    ptScene.add(new THREE.AmbientLight(0xffffff, 0.9));
+    ptScene.add(new THREE.DirectionalLight(0xfff5e0, 0.5));
+
+    ptFloor(0xc8c4bc, 8000);
+    // Ceiling
+    const ceil = new THREE.Mesh(new THREE.PlaneGeometry(8000, 8000),
+        new THREE.MeshLambertMaterial({ color: 0xdddddd }));
+    ceil.rotation.x = Math.PI/2; ceil.position.y = 500; ptScene.add(ceil);
+
+    // Fluorescent-style rect lights (just bright boxes)
+    [[-1200,490,0],[0,490,0],[1200,490,0],[-1200,490,1800],[0,490,1800],[1200,490,1800]].forEach(([x,y,z]) => {
+        const light = new THREE.Mesh(new THREE.BoxGeometry(400, 10, 80),
+            new THREE.MeshBasicMaterial({ color: 0xffffee }));
+        light.position.set(x, y, z); ptScene.add(light);
+    });
+
+    // 32 cubicles in a grid (8x4)
+    ptComputersOn = [];
+    const cubW=280, cubD=280, wallH=200, wallT=14;
+    const wallMat = new THREE.MeshLambertMaterial({ color: 0xb0a898 });
+    const deskMat = new THREE.MeshLambertMaterial({ color: 0x8a7060 });
+    const monOffMat= new THREE.MeshLambertMaterial({ color: 0x111111 });
+    const monOnMat = new THREE.MeshBasicMaterial({ color: 0x00ff88 });
+
+    // Pick ONE random on computer
+    const onIndex = Math.floor(Math.random() * 32);
+
+    let idx = 0;
+    for (let row = 0; row < 4; row++) {
+        for (let col = 0; col < 8; col++, idx++) {
+            const cx = (col - 3.5) * (cubW + 40);
+            const cz = (row - 1.5) * (cubD + 40);
+
+            // Three walls (U-shape opening to south)
+            const back = new THREE.Mesh(new THREE.BoxGeometry(cubW, wallH, wallT), wallMat);
+            back.position.set(cx, wallH/2, cz - cubD/2);
+            const left = new THREE.Mesh(new THREE.BoxGeometry(wallT, wallH, cubD), wallMat);
+            left.position.set(cx - cubW/2, wallH/2, cz);
+            const right = new THREE.Mesh(new THREE.BoxGeometry(wallT, wallH, cubD), wallMat);
+            right.position.set(cx + cubW/2, wallH/2, cz);
+            ptScene.add(back, left, right);
+
+            // Desk
+            const desk = new THREE.Mesh(new THREE.BoxGeometry(cubW-30, 18, 100), deskMat);
+            desk.position.set(cx, 90, cz - cubD/2 + 60);
+            ptScene.add(desk);
+
+            // Monitor
+            const isOn = (idx === onIndex);
+            const mon = new THREE.Mesh(new THREE.BoxGeometry(90, 65, 12), isOn ? monOnMat : monOffMat);
+            mon.position.set(cx, 130, cz - cubD/2 + 60);
+            ptScene.add(mon);
+
+            if (isOn) {
+                ptComputersOn.push({ x: cx, z: cz-cubD/2+60 });
+            }
+        }
+    }
+
+    ptScene.userData.onUpdate = () => {};
+}
+
+// ── ROOM 6 — Placeholder ─────────────────────────────────────────
+function buildPTRoom6() {
+    document.getElementById('dim-label').innerText = '✨ Placeholder';
+    ptScene.background = new THREE.Color(0xffffff);
+    ptScene.add(new THREE.AmbientLight(0xffffff, 2));
+    ptFloor(0xffffff, 20000);
+
+    ptTextTimeout = setTimeout(() => {
+        ptShowOverlay('Congrats!! u basically beat the level,\ni\'m adding more soon.', '#555555', 0, null);
+    }, 500);
+
+    ptScene.userData.onUpdate = () => {};
+}
+
+// ── ROOM 7 — Lost 404 ─────────────────────────────────────────────
+function buildPTRoom7() {
+    document.getElementById('dim-label').innerText = '📡 Lost 404';
+    // Abstract glitch world — black & white with checker and noise patterns
+    ptScene.background = new THREE.Color(0xf0f0f0);
+    ptScene.fog = new THREE.FogExp2(0xf0f0f0, 0.00012);
+    ptScene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    ptScene.add(new THREE.DirectionalLight(0xffffff, 0.8));
+
+    // Floor: alternating black/white checker pattern
+    const checkerSize = 400;
+    for (let i = -12; i <= 12; i++) {
+        for (let j = -12; j <= 12; j++) {
+            const tile = new THREE.Mesh(
+                new THREE.PlaneGeometry(checkerSize, checkerSize),
+                new THREE.MeshLambertMaterial({ color: (i+j)%2===0 ? 0xffffff : 0x111111 })
+            );
+            tile.rotation.x = -Math.PI/2;
+            tile.position.set(i*checkerSize, -0.5, j*checkerSize);
+            ptScene.add(tile);
+        }
+    }
+
+    // Scattered abstract shapes — boxes, diamonds at random scales
+    const rng4 = seededRand(404);
+    const geoBMats = [
+        new THREE.MeshBasicMaterial({ color: 0x000000 }),
+        new THREE.MeshBasicMaterial({ color: 0xffffff }),
+        new THREE.MeshBasicMaterial({ wireframe: true, color: 0x000000 }),
+    ];
+    for (let i = 0; i < 80; i++) {
+        const tx = (rng4()-0.5)*16000, tz = (rng4()-0.5)*16000;
+        const s = 50 + rng4()*400;
+        const sh = new THREE.Mesh(new THREE.BoxGeometry(s, s*2, s),
+            geoBMats[Math.floor(rng4()*3)]);
+        sh.position.set(tx, s, tz);
+        sh.rotation.y = rng4()*Math.PI;
+        ptScene.add(sh);
+    }
+
+    // Floating diamonds
+    for (let i = 0; i < 30; i++) {
+        const tx = (rng4()-0.5)*10000, tz = (rng4()-0.5)*10000;
+        const s = 100 + rng4()*300;
+        const dia = new THREE.Mesh(new THREE.OctahedronGeometry(s),
+            geoBMats[Math.floor(rng4()*2)]);
+        dia.position.set(tx, 200 + rng4()*800, tz);
+        ptScene.add(dia);
+    }
+
+    // Swirly horizon cylinders (like distant objects in Image 3)
+    for (let i = 0; i < 20; i++) {
+        const ang = rng4()*Math.PI*2, dist = 4000 + rng4()*8000;
+        const h = 400 + rng4()*1200;
+        const cyl = new THREE.Mesh(new THREE.CylinderGeometry(80+rng4()*120, 80+rng4()*120, h, 8),
+            geoBMats[Math.floor(rng4()*2)]);
+        cyl.position.set(Math.cos(ang)*dist, h/2, Math.sin(ang)*dist);
+        ptScene.add(cyl);
+    }
+
+    // Text sequence
+    const texts = [
+        { delay: 30000, msg: "I've been watching you since you first started playing this game." },
+        { delay: 60000, msg: "You're not bad at it, not at all." },
+        { delay: 90000, msg: "I will have to send you to the end. This is not by my choice." },
+    ];
+    texts.forEach(t => {
+        setTimeout(() => {
+            ptShowOverlay(t.msg, '#cc44ee', 10000, null);
+        }, t.delay);
+    });
+    // 10s after text 3 → Placeholder
+    setTimeout(() => { enterPTRoom(6); }, 100000);
+
+    ptScene.userData.onUpdate = () => {};
+}
+
+// ── PT portal / door checks ───────────────────────────────────────
+function checkPTPortals() {
+    const prompt = document.getElementById('portal-prompt');
+
+    if (ptRoom === 1) {
+        // Clamp to room
+        const ROOM_W = 1200, ROOM_D = 1200;
+        pos.x = Math.max(-ROOM_W/2+40, Math.min(ROOM_W/2-40, pos.x));
+        pos.z = Math.max(-ROOM_D/2+40, Math.min(ROOM_D/2-40, pos.z));
+
+    } else if (ptRoom === 2) {
+        // Door proximity checks
+        if (ptScene.userData.doors) {
+            let nearDoor = null;
+            ptScene.userData.doors.forEach(d => {
+                const dx = pos.x-d.x, dz2 = pos.z-d.z;
+                if (Math.sqrt(dx*dx+dz2*dz2) < 160) nearDoor = d;
+            });
+            if (nearDoor) {
+                prompt.innerText = nearDoor.label;
+                prompt.style.color = nearDoor.color;
+                prompt.style.display = 'block';
+                if (keys['KeyE']) { keys['KeyE']=false; prompt.style.color=''; enterPTRoom(nearDoor.dest); }
+            } else { prompt.style.display='none'; prompt.style.color=''; }
+        }
+
+    } else if (ptRoom === 3) {
+        // Near the empty door → enter Cubicle Farm
+        const DOOR_Z = ptScene.userData.everpurpleDoorZ || 50000;
+        const dx = pos.x, dz2 = pos.z - DOOR_Z;
+        if (Math.sqrt(dx*dx+dz2*dz2) < 250) {
+            prompt.innerText = '[ E ] Enter the door';
+            prompt.style.display = 'block';
+            if (keys['KeyE']) { keys['KeyE']=false; enterPTRoom(5); }
+        } else {
+            prompt.style.display = 'none';
+            // Clamp to everpurple map size
+            const maxR = PT_EVERPURPLE_SIZE * 0.95;
+            const d2 = Math.sqrt(pos.x*pos.x+pos.z*pos.z);
+            if (d2 > maxR && !ptTransporting) {
+                // Hit border → Lost 404 path
+                ptTransporting = true;
+                ptFadeToBlack(800, () => {
+                    ptTransporting = false;
+                    if (ptOverlay) {
+                        ptOverlay.style.background = 'transparent';
+                        ptOverlay.style.color = '#cc44ee';
+                        ptOverlay.style.opacity = '0';
+                        ptOverlay.innerText = 'Are you lost?';
+                        ptOverlay.style.transition = 'opacity 1s ease';
+                        requestAnimationFrame(() => { ptOverlay.style.opacity='1'; });
+                    }
+                    setTimeout(() => { ptTransporting=false; _buildPTRoom(7); }, 5000);
+                });
+            }
+        }
+
+    } else if (ptRoom === 5) {
+        // Check near on-computer
+        let nearPC = null;
+        ptComputersOn.forEach(pc => {
+            const dx = pos.x-pc.x, dz2 = pos.z-pc.z;
+            if (Math.sqrt(dx*dx+dz2*dz2) < 200) nearPC = pc;
+        });
+        if (nearPC) {
+            prompt.innerText = '[ E ] Enter';
+            prompt.style.display = 'block';
+            if (keys['KeyE']) { keys['KeyE']=false; enterPTRoom(6); }
+        } else {
+            prompt.style.display = 'none';
+        }
+
+    } else {
+        prompt.style.display = 'none';
+    }
+
+    // Run per-room update hook
+    if (ptScene && ptScene.userData.onUpdate) {
+        const dt = clock3 ? clock3.getDelta() : 0.016;
+        // NOTE: dt is consumed by main loop already so we pass 0 here to avoid double-step
+        // instead we re-read from a stored lastPTDt
+    }
+}
+
+// ── PT update (called from main loop, receives dt from loop) ─────
+let _ptLastFrameTime = 0;
+function updatePT() {
+    if (!currentDim.startsWith('pt_') || !ptScene) return;
+    const now = performance.now();
+    const dt = Math.min((now - (_ptLastFrameTime || now)) / 1000, 0.1);
+    _ptLastFrameTime = now;
+    if (ptScene.userData.onUpdate) ptScene.userData.onUpdate(dt);
+}
+
+// ── Exit plastic terrace → Hub ────────────────────────────────────
+function exitPlasticTerrace() {
+    ptClearOverlay();
+    if (ptTextTimeout) { clearTimeout(ptTextTimeout); ptTextTimeout = null; }
+    ptTransporting = false;
+    enterHub();
 }
 
 // ── Portal ────────────────────────────────────────────────────────
