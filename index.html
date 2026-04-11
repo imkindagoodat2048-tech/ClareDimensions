@@ -442,10 +442,16 @@ function restartServer() {
 }
 
 // Listen for restart signal — triggers on ALL clients
+let _joinTime = 0;
 function listenForServerRestart() {
+    _joinTime = Date.now();
     db.ref('cd_server/restart').on('value', snap => {
         if (!snap.exists() || !myId) return;
-        // Small random delay so not everyone slams the server at once
+        const restartTime = snap.val();
+        // Ignore signals that were set before we joined (stale restarts)
+        if (typeof restartTime !== 'number' || restartTime <= _joinTime) return;
+        // Admin clears the flag so rejoining clients don't get kicked again
+        if (isAdmin) db.ref('cd_server/restart').remove();
         setTimeout(() => { if (myRef) myRef.remove(); location.reload(); }, Math.random() * 1500);
     });
 }
