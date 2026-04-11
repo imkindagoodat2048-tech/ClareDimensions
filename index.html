@@ -1608,7 +1608,8 @@ function update(dt) {
         // Plastic Terrace sub-rooms: clamp to a generous flat area
         pos.x = Math.max(-PT_ROOM_SIZE, Math.min(PT_ROOM_SIZE, newX));
         pos.z = Math.max(-PT_ROOM_SIZE, Math.min(PT_ROOM_SIZE, newZ));
-        pos.y = 0;
+        // Only reset y to 0 in rooms other than room 1 — room 1 manages y for sinking
+        if (ptRoom !== 1) pos.y = 0;
     } else {
         // Grasslands — clamp to terrain bounds
         newX = Math.max(-G_SIZE + 50, Math.min(G_SIZE - 50, newX));
@@ -2901,7 +2902,7 @@ function loop() {
     requestAnimationFrame(loop);
     const dt = Math.min(clock3.getDelta(), 0.05);
     update(dt);
-    if (currentDim.startsWith('pt_')) updatePT();
+    if (currentDim.startsWith('pt_')) updatePT(dt);
     if (activeScene && activeCamera) renderer.render(activeScene, activeCamera);
 }
 
@@ -4504,11 +4505,8 @@ function checkPTPortals() {
 
 // ── PT update (called from main loop, receives dt from loop) ─────
 let _ptLastFrameTime = 0;
-function updatePT() {
+function updatePT(dt) {
     if (!currentDim.startsWith('pt_') || !ptScene) return;
-    const now = performance.now();
-    const dt = Math.min((now - (_ptLastFrameTime || now)) / 1000, 0.1);
-    _ptLastFrameTime = now;
     if (ptScene.userData.onUpdate) ptScene.userData.onUpdate(dt);
 }
 
