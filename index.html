@@ -3956,8 +3956,9 @@ function buildPTRoom1() {
     });
 
     // ── Pond (leads to The Decision when stepped in) ──────────────
-    const POND_X = 160, POND_Z = -100;
-    const POND_RX = 75, POND_RZ = 55;
+    // Safely inside room: HALF_W=275, HALF_D=250. Pond at (160, 60) — right side, centre-ish
+    const POND_X = 150, POND_Z = 60;
+    const POND_RX = 65, POND_RZ = 50;
     // Stone rim around pond
     const pondRimMat = new THREE.MeshLambertMaterial({ color: 0x778899 });
     for (let a = 0; a < Math.PI*2; a += Math.PI/8) {
@@ -4012,15 +4013,13 @@ function buildPTRoom1() {
     ptScene.add(exitSign);
     ptScene.userData.exitDoor = { x: 0, z: -HALF_D+10 };
 
-    // ── Wall collision boxes (AABB) ───────────────────────────────
-    ptScene.userData.wallBoxes = [
-        { minX: -HALF_W,        maxX: -HALF_W+WALL_T, minZ: -HALF_D, maxZ: HALF_D   }, // left
-        { minX:  HALF_W-WALL_T, maxX:  HALF_W,        minZ: -HALF_D, maxZ: HALF_D   }, // right
-        { minX: -HALF_W,        maxX:  HALF_W,        minZ: -HALF_D, maxZ: -HALF_D+WALL_T }, // back
-        { minX: -HALF_W,        maxX:  HALF_W,        minZ:  HALF_D-WALL_T, maxZ: HALF_D  }, // front
-    ];
+    // ── Wall collision — store inner bounds for clamping ─────────
+    // Player is clamped to stay inside the room interior.
+    // The exit gap in the back wall (x: -35..35) is handled separately.
+    ptScene.userData.wallBoxes = []; // legacy field kept for compatibility
     ptScene.userData.halfW = HALF_W;
     ptScene.userData.halfD = HALF_D;
+    ptScene.userData.wallT = WALL_T;
     ptScene.userData.exitGap = { minX: -35, maxX: 35 };
 
     // ── Room bounds & sinking mechanic ───────────────────────────
@@ -4398,27 +4397,20 @@ function checkPTPortals() {
     const prompt = document.getElementById('portal-prompt');
 
     if (ptRoom === 1) {
-        // ── Wall collision ────────────────────────────────────────
+        // ── Wall collision — clamp player inside room interior ────
         const ud = ptScene.userData;
-        if (ud.wallBoxes) {
-            const PR = 30; // player radius
-            for (const box of ud.wallBoxes) {
-                // Back wall has an exit gap — skip collision in that gap
-                const isBackWall = ud.halfD && (box.minZ < -ud.halfD + 5);
-                const inGap = isBackWall && ud.exitGap && pos.x > ud.exitGap.minX && pos.x < ud.exitGap.maxX;
-                if (inGap) continue;
-                if (pos.x > box.minX - PR && pos.x < box.maxX + PR &&
-                    pos.z > box.minZ - PR && pos.z < box.maxZ + PR) {
-                    // Push out on shortest axis
-                    const overlapX = Math.min(pos.x - (box.minX - PR), (box.maxX + PR) - pos.x);
-                    const overlapZ = Math.min(pos.z - (box.minZ - PR), (box.maxZ + PR) - pos.z);
-                    if (overlapX < overlapZ) {
-                        pos.x += pos.x < (box.minX + box.maxX)/2 ? -overlapX : overlapX;
-                    } else {
-                        pos.z += pos.z < (box.minZ + box.maxZ)/2 ? -overlapZ : overlapZ;
-                    }
-                }
-            }
+        if (ud.halfW) {
+            const PR = 28;
+            const innerW = ud.halfW - ud.wallT - PR;
+            const innerD = ud.halfD - ud.wallT - PR;
+            // Left / right walls
+            if (pos.x < -innerW) pos.x = -innerW;
+            if (pos.x >  innerW) pos.x =  innerW;
+            // Front wall
+            if (pos.z > innerD) pos.z = innerD;
+            // Back wall — allow exit gap (x between -35..35 lets player through)
+            const inGap = ud.exitGap && pos.x > ud.exitGap.minX && pos.x < ud.exitGap.maxX;
+            if (!inGap && pos.z < -innerD) pos.z = -innerD;
         }
 
         // ── Exit door ─────────────────────────────────────────────
