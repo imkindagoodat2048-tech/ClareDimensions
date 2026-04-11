@@ -3926,9 +3926,40 @@ function buildPTRoom1() {
         ptScene.add(dot);
     });
 
+    // ── Exit door back to Hub — near spawn ───────────────────────
+    // A simple wooden door frame at the back wall (behind spawn)
+    const exitDoorMat = new THREE.MeshLambertMaterial({ color: 0x8b5e3c, emissive: 0x2a1a0a, emissiveIntensity: 0.2 });
+    const exitFrame = new THREE.Mesh(new THREE.BoxGeometry(70, 110, WALL_T+4), exitDoorMat);
+    exitFrame.position.set(0, 55, -HALF_D);
+    ptScene.add(exitFrame);
+    const exitOpening = new THREE.Mesh(new THREE.BoxGeometry(50, 90, WALL_T+8),
+        new THREE.MeshBasicMaterial({ color: 0x111111 }));
+    exitOpening.position.set(0, 50, -HALF_D);
+    ptScene.add(exitOpening);
+    // Small "EXIT" sign above door
+    const exitSign = new THREE.Mesh(new THREE.BoxGeometry(60, 16, 4),
+        new THREE.MeshLambertMaterial({ color: 0x22cc44 }));
+    exitSign.position.set(0, 115, -HALF_D+12);
+    ptScene.add(exitSign);
+    ptScene.userData.exitDoor = { x: 0, z: -HALF_D+10 };
+
+    // ── Wall collision boxes (AABB) ───────────────────────────────
+    // Stored so checkPTPortals can enforce them
+    ptScene.userData.wallBoxes = [
+        { minX: -HALF_W,      maxX: -HALF_W+WALL_T, minZ: -HALF_D, maxZ: HALF_D  }, // left
+        { minX:  HALF_W-WALL_T, maxX: HALF_W,        minZ: -HALF_D, maxZ: HALF_D  }, // right
+        { minX: -HALF_W,      maxX: HALF_W,          minZ: -HALF_D, maxZ: -HALF_D+WALL_T }, // back
+        { minX: -HALF_W,      maxX: HALF_W,          minZ:  HALF_D-WALL_T, maxZ: HALF_D  }, // front
+    ];
+    // Keep the exit door gap in the back wall collision
+    // (gap: x in [-35, 35] at z = back wall)
+    ptScene.userData.exitGap = { minX: -35, maxX: 35 };
+
     // ── Room bounds & sinking mechanic ───────────────────────────
     ptScene.userData.roomW = ROOM_W;
     ptScene.userData.roomD = ROOM_D;
+    ptScene.userData.halfW = HALF_W;
+    ptScene.userData.halfD = HALF_D;
     ptScene.userData.ballPitCenter = { x: PIT_X, z: PIT_Z };
     ptScene.userData.ballPitRadius = PIT_RX - 10;
     ptScene.userData.sinkY = 0;
@@ -4291,10 +4322,43 @@ function checkPTPortals() {
     const prompt = document.getElementById('portal-prompt');
 
     if (ptRoom === 1) {
-        prompt.style.display = 'none';
-        const ROOM_W = 550, ROOM_D = 500;
-        pos.x = Math.max(-ROOM_W/2+40, Math.min(ROOM_W/2-40, pos.x));
-        pos.z = Math.max(-ROOM_D/2+40, Math.min(ROOM_D/2-40, pos.z));
+        // ── Wall collision ────────────────────────────────────────
+        const ud = ptScene.userData;
+        if (ud.wallBoxes) {
+            const PR = 30; // player radius
+            for (const box of ud.wallBoxes) {
+                // Back wall has an exit gap — skip collision in that gap
+                const isBackWall = (box.minZ < -ud.halfD + 5 && box.maxZ < -ud.halfD + ud.roomW);
+                const inGap = isBackWall && ud.exitGap && pos.x > ud.exitGap.minX && pos.x < ud.exitGap.maxX;
+                if (inGap) continue;
+                if (pos.x > box.minX - PR && pos.x < box.maxX + PR &&
+                    pos.z > box.minZ - PR && pos.z < box.maxZ + PR) {
+                    // Push out on shortest axis
+                    const overlapX = Math.min(pos.x - (box.minX - PR), (box.maxX + PR) - pos.x);
+                    const overlapZ = Math.min(pos.z - (box.minZ - PR), (box.maxZ + PR) - pos.z);
+                    if (overlapX < overlapZ) {
+                        pos.x += pos.x < (box.minX + box.maxX)/2 ? -overlapX : overlapX;
+                    } else {
+                        pos.z += pos.z < (box.minZ + box.maxZ)/2 ? -overlapZ : overlapZ;
+                    }
+                }
+            }
+        }
+
+        // ── Exit door ─────────────────────────────────────────────
+        const ed = ptScene.userData.exitDoor;
+        if (ed) {
+            const edx = pos.x - ed.x, edz = pos.z - ed.z;
+            if (Math.sqrt(edx*edx + edz*edz) < 80) {
+                prompt.innerText = '[ E ] Exit to Hub';
+                prompt.style.display = 'block';
+                if (keys['KeyE']) { keys['KeyE'] = false; exitPlasticTerrace(); }
+            } else {
+                prompt.style.display = 'none';
+            }
+        } else {
+            prompt.style.display = 'none';
+        }
 
     } else if (ptRoom === 2) {
         // Door proximity checks
