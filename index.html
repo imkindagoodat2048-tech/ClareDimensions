@@ -208,9 +208,9 @@
         <span class="sep">|</span>
         <span class="player-tag" id="online-label">0 online</span>
     </div>
+    <button class="icon-btn" id="restart-btn" onclick="restartServer()" style="display:none;background:#5a1a1a;color:#ff6b6b;">🔄 Restart Server</button>
     <button class="icon-btn" onclick="leaveGame()">Leave</button>
 </div>
-
 <div id="c"></div>
 
 <!-- OVERLAYS -->
@@ -400,7 +400,10 @@ function launchGame(username, color, pfp, adminFlag) {
         mini.src = pfp; mini.style.display = 'inline-block';
         mini.onerror = () => mini.style.display = 'none';
     }
-    if (isAdmin) document.getElementById('adm-tag').style.display = 'inline';
+    if (isAdmin) {
+        document.getElementById('adm-tag').style.display = 'inline';
+        document.getElementById('restart-btn').style.display = 'inline-block';
+    }
     document.getElementById('crosshair').style.display  = 'block';
     document.getElementById('lock-prompt').style.display = 'block';
     document.getElementById('hint').style.display        = 'block';
@@ -422,10 +425,30 @@ function launchGame(username, color, pfp, adminFlag) {
     document.getElementById('join-screen').classList.add('hidden');
     initRenderer();
     enterHub();
+    listenForServerRestart();
     loop();
 }
 
 function leaveGame() { if (myRef) myRef.remove(); location.reload(); }
+
+// ── Server restart ──────────────────────────────────────────────
+function restartServer() {
+    if (!isAdmin) return;
+    if (!confirm('Restart the server? This will kick everyone and reload all maps.')) return;
+    // Wipe all players then broadcast the restart signal
+    db.ref('cd_players').remove().then(() => {
+        db.ref('cd_server/restart').set(Date.now());
+    });
+}
+
+// Listen for restart signal — triggers on ALL clients
+function listenForServerRestart() {
+    db.ref('cd_server/restart').on('value', snap => {
+        if (!snap.exists() || !myId) return;
+        // Small random delay so not everyone slams the server at once
+        setTimeout(() => { if (myRef) myRef.remove(); location.reload(); }, Math.random() * 1500);
+    });
+}
 
 // ── Remove player on tab close / navigate away ──
 window.addEventListener('beforeunload', () => { if (myRef) myRef.remove(); });
