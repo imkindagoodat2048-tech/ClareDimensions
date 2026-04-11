@@ -3682,12 +3682,14 @@ function ptClearOverlay() {
 
 // ── Enter Plastic Terrace ─────────────────────────────────────────
 function enterPlasticTerrace() {
+    document.getElementById('portal-prompt').style.display = 'none';
     enterPTRoom(1); // start at Room 1: The Playcenter
 }
 
 function enterPTRoom(room) {
     if (ptTransporting) return;
     ptTransporting = true;
+    document.getElementById('portal-prompt').style.display = 'none';
 
     ptFadeToBlack(600, () => {
         _buildPTRoom(room);
@@ -3774,130 +3776,179 @@ function buildPTRoom0() {
 function buildPTRoom1() {
     document.getElementById('dim-label').innerText = '🧸 The Playcenter';
 
-    // Painted field walls — sky blue ceiling, grassy walls
+    // Room is roughly the size of a Canadian IKEA ball pit area — cozy and enclosed
+    // World units: player is ~55 units tall. Room should feel like a medium play space.
+    const ROOM_W = 550, ROOM_D = 500, WALL_H = 320;
+    const HALF_W = ROOM_W/2, HALF_D = ROOM_D/2;
+
     ptScene.background = new THREE.Color(0x9ad4f5);
-    ptScene.add(new THREE.AmbientLight(0xffffff, 0.9));
-    ptScene.add(new THREE.DirectionalLight(0xfff0cc, 0.6));
+    ptScene.add(new THREE.AmbientLight(0xffffff, 1.1));
+    ptScene.add(new THREE.DirectionalLight(0xfff0cc, 0.5));
 
-    const ROOM_W = 1200, ROOM_D = 1200, WALL_H = 700;
-    const wallMats = {
-        grass: new THREE.MeshLambertMaterial({ color: 0x4fc053 }),
-        sky:   new THREE.MeshLambertMaterial({ color: 0x9ad4f5 }),
-    };
+    // ── Solid box walls (thick, visible from inside) ──────────────
+    const WALL_T = 20;
+    const grassMat  = new THREE.MeshLambertMaterial({ color: 0x4fc053 });
+    const skyMat    = new THREE.MeshLambertMaterial({ color: 0xb8e0f7 });
+    const ceilMat   = new THREE.MeshLambertMaterial({ color: 0x9ad4f5 });
 
-    // Floor — soft green
-    ptFloor(0x5cb85c, PT_ROOM_SIZE);
+    // Floor — green carpet
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(ROOM_W, 8, ROOM_D), grassMat);
+    floor.position.set(0, -4, 0);
+    ptScene.add(floor);
 
-    // Painted walls (4 sides + ceiling) — the "field" illusion
-    // Back wall (z = -D/2)
-    const backWall = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_W, WALL_H), wallMats.grass);
-    backWall.position.set(0, WALL_H/2, -ROOM_D/2);
-    ptScene.add(backWall);
+    // Back wall  (z = -HALF_D)
+    const wallBack = new THREE.Mesh(new THREE.BoxGeometry(ROOM_W, WALL_H, WALL_T), grassMat);
+    wallBack.position.set(0, WALL_H/2, -HALF_D);
+    ptScene.add(wallBack);
 
-    // Front wall
-    const frontWall = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_W, WALL_H), wallMats.grass.clone());
-    frontWall.rotation.y = Math.PI; frontWall.position.set(0, WALL_H/2, ROOM_D/2);
-    ptScene.add(frontWall);
+    // Front wall (z = +HALF_D)
+    const wallFront = new THREE.Mesh(new THREE.BoxGeometry(ROOM_W, WALL_H, WALL_T), grassMat);
+    wallFront.position.set(0, WALL_H/2, HALF_D);
+    ptScene.add(wallFront);
 
-    // Left wall
-    const leftWall = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_D, WALL_H), wallMats.grass.clone());
-    leftWall.rotation.y = Math.PI/2; leftWall.position.set(-ROOM_W/2, WALL_H/2, 0);
-    ptScene.add(leftWall);
+    // Left wall  (x = -HALF_W)
+    const wallLeft = new THREE.Mesh(new THREE.BoxGeometry(WALL_T, WALL_H, ROOM_D), grassMat);
+    wallLeft.position.set(-HALF_W, WALL_H/2, 0);
+    ptScene.add(wallLeft);
 
-    // Right wall
-    const rightWall = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_D, WALL_H), wallMats.grass.clone());
-    rightWall.rotation.y = -Math.PI/2; rightWall.position.set(ROOM_W/2, WALL_H/2, 0);
-    ptScene.add(rightWall);
+    // Right wall (x = +HALF_W)
+    const wallRight = new THREE.Mesh(new THREE.BoxGeometry(WALL_T, WALL_H, ROOM_D), grassMat);
+    wallRight.position.set(HALF_W, WALL_H/2, 0);
+    ptScene.add(wallRight);
 
-    // Ceiling
-    const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_W, ROOM_D), wallMats.sky.clone());
-    ceiling.rotation.x = Math.PI/2; ceiling.position.y = WALL_H;
-    ptScene.add(ceiling);
+    // Ceiling — sky blue box
+    const wallCeil = new THREE.Mesh(new THREE.BoxGeometry(ROOM_W, WALL_T, ROOM_D), ceilMat);
+    wallCeil.position.set(0, WALL_H, 0);
+    ptScene.add(wallCeil);
 
-    // Add some "tree" bumps on the walls using boxes (painted look)
-    [-400, 0, 350].forEach(bx => {
-        const trunk = ptWallBox(60, 200, 30, bx, 100, -ROOM_D/2+15, 0x7a5230);
-        const leaves = ptWallBox(180, 200, 30, bx, 280, -ROOM_D/2+15, 0x2d7a2d);
+    // ── Painted "field" details on the back wall ───────────────────
+    // Rolling green hill strip along the bottom of the back wall
+    const hillMat = new THREE.MeshLambertMaterial({ color: 0x2e8b2e });
+    const hill = new THREE.Mesh(new THREE.BoxGeometry(ROOM_W-2, 60, 4), hillMat);
+    hill.position.set(0, 30, -HALF_D+12);
+    ptScene.add(hill);
+
+    // Painted trees on back wall
+    [-160, 0, 160].forEach(bx => {
+        // Trunk
+        const trunk = new THREE.Mesh(new THREE.BoxGeometry(14, 70, 4),
+            new THREE.MeshLambertMaterial({ color: 0x7a5230 }));
+        trunk.position.set(bx, 55, -HALF_D+12);
+        ptScene.add(trunk);
+        // Leaves blob
+        const leaves = new THREE.Mesh(new THREE.SphereGeometry(32, 8, 6),
+            new THREE.MeshLambertMaterial({ color: 0x228b22 }));
+        leaves.position.set(bx, 118, -HALF_D+12);
+        ptScene.add(leaves);
+    });
+    // Thin cypress-style trees
+    [80, -80].forEach(bx => {
+        const cyp = new THREE.Mesh(new THREE.ConeGeometry(10, 90, 7),
+            new THREE.MeshLambertMaterial({ color: 0x1a6b1a }));
+        cyp.position.set(bx, 105, -HALF_D+12);
+        ptScene.add(cyp);
     });
 
-    // Hollow plastic log — walkable tunnel (no collision, just visual)
-    const logMat = new THREE.MeshLambertMaterial({ color: 0xc06820 });
-    const logOuter = new THREE.Mesh(new THREE.CylinderGeometry(130, 140, 500, 16), logMat);
-    logOuter.rotation.z = Math.PI/2; logOuter.position.set(350, 130, -100);
+    // Sky details on upper back wall — painted clouds (white boxes)
+    [[60, 230, 0x5], [-80, 250, 0x6], [150, 240, 0x5]].forEach(([bx, by]) => {
+        const cloud = new THREE.Mesh(new THREE.SphereGeometry(28, 7, 5),
+            new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }));
+        cloud.position.set(bx, by, -HALF_D+14);
+        ptScene.add(cloud);
+    });
+
+    // ── Fluorescent ceiling light strip ──────────────────────────
+    const lightStrip = new THREE.Mesh(new THREE.BoxGeometry(300, 8, 60),
+        new THREE.MeshBasicMaterial({ color: 0xffffee }));
+    lightStrip.position.set(0, WALL_H-WALL_T/2-1, 0);
+    ptScene.add(lightStrip);
+    ptScene.add(Object.assign(new THREE.PointLight(0xfff8e0, 1.2, 1200), { position: new THREE.Vector3(0, WALL_H-30, 0) }));
+
+    // ── Hollow plastic log (crawl-through sized) ──────────────────
+    const logMat  = new THREE.MeshLambertMaterial({ color: 0xb85c18 });
+    const logR    = 38; // just big enough for player to fit
+    const logLen  = 220;
+    const logOuter = new THREE.Mesh(new THREE.CylinderGeometry(logR, logR+4, logLen, 14), logMat);
+    logOuter.rotation.z = Math.PI/2;
+    logOuter.position.set(130, logR, 80);
     ptScene.add(logOuter);
-    // Hollow inside (darker)
-    const logInner = new THREE.Mesh(new THREE.CylinderGeometry(115, 115, 510, 16),
-        new THREE.MeshLambertMaterial({ color: 0x5a2800, side: THREE.BackSide }));
-    logInner.rotation.z = Math.PI/2; logInner.position.set(350, 130, -100);
+    const logInner = new THREE.Mesh(new THREE.CylinderGeometry(logR-6, logR-6, logLen+10, 14),
+        new THREE.MeshLambertMaterial({ color: 0x3a1800, side: THREE.BackSide }));
+    logInner.rotation.z = Math.PI/2;
+    logInner.position.set(130, logR, 80);
     ptScene.add(logInner);
-
-    // Stone arch near the log
-    const stoneMat = new THREE.MeshLambertMaterial({ color: 0x888899 });
-    const archBase1 = ptWallBox(60, 200, 60, 180, 100, -120, 0x888899);
-    const archBase2 = ptWallBox(60, 200, 60, 300, 100, -120, 0x888899);
-    const archTop   = ptWallBox(180, 55, 60, 240, 205, -120, 0x888899);
-
-    // Ball pit — shallow oval pool, stone-edged, blue "water"
-    const pitEdgeMat = new THREE.MeshLambertMaterial({ color: 0x888899 });
-    // Oval using a ring of boxes
-    for (let a = 0; a < Math.PI*2; a += Math.PI/8) {
-        const ex = Math.cos(a)*250, ez = Math.sin(a)*140;
-        const edgeBox = new THREE.Mesh(new THREE.BoxGeometry(70, 40, 40), pitEdgeMat);
-        edgeBox.position.set(ex - 100, 20, ez + 400);
-        edgeBox.rotation.y = a;
-        ptScene.add(edgeBox);
+    // Log grain lines
+    for (let i = -2; i <= 2; i++) {
+        const grain = new THREE.Mesh(new THREE.TorusGeometry(logR-2, 1.5, 4, 14),
+            new THREE.MeshLambertMaterial({ color: 0x8a3a08 }));
+        grain.rotation.y = Math.PI/2;
+        grain.position.set(130 + i*38, logR, 80);
+        ptScene.add(grain);
     }
-    // Water fill
-    const waterMat = new THREE.MeshLambertMaterial({ color: 0x1a8fc1, transparent: true, opacity: 0.85 });
-    const water = new THREE.Mesh(new THREE.CylinderGeometry(220, 220, 5, 32), waterMat);
-    water.position.set(-100, 18, 400);
+
+    // ── Stone arch ────────────────────────────────────────────────
+    ptWallBox(22, 90, 22,  70, 45, 80, 0x888899); // left pillar
+    ptWallBox(22, 90, 22, 120, 45, 80, 0x888899); // right pillar
+    ptWallBox(72, 22, 22,  95, 95, 80, 0x888899); // top lintel
+
+    // ── Stump seat ────────────────────────────────────────────────
+    const stump = new THREE.Mesh(new THREE.CylinderGeometry(22, 26, 28, 10),
+        new THREE.MeshLambertMaterial({ color: 0xa0632a }));
+    stump.position.set(50, 14, -80);
+    ptScene.add(stump);
+
+    // ── Ball pit (kid-sized, stone-rimmed, blue water) ────────────
+    const PIT_X = -120, PIT_Z = 130;
+    const PIT_RX = 90, PIT_RZ = 65; // oval radii
+    const pitEdgeMat = new THREE.MeshLambertMaterial({ color: 0x888899 });
+    for (let a = 0; a < Math.PI*2; a += Math.PI/9) {
+        const ex = Math.cos(a)*PIT_RX, ez = Math.sin(a)*PIT_RZ;
+        const eb = new THREE.Mesh(new THREE.BoxGeometry(28, 18, 16), pitEdgeMat);
+        eb.position.set(PIT_X+ex, 9, PIT_Z+ez);
+        eb.rotation.y = a;
+        ptScene.add(eb);
+    }
+    const waterMat = new THREE.MeshLambertMaterial({ color: 0x1a8fc1, transparent: true, opacity: 0.9 });
+    const water = new THREE.Mesh(new THREE.CylinderGeometry(PIT_RX-12, PIT_RX-12, 4, 24), waterMat);
+    water.scale.z = PIT_RZ / PIT_RX;
+    water.position.set(PIT_X, 7, PIT_Z);
     ptScene.add(water);
 
-    // Ladybugs (red spheres with black dots on the pit edges)
-    [-80, -120].forEach((ox) => {
-        const lb = new THREE.Mesh(new THREE.SphereGeometry(20, 8, 8),
+    // Ladybugs on pit rim
+    [-30, 30].forEach(ox => {
+        const lb = new THREE.Mesh(new THREE.SphereGeometry(8, 8, 7),
             new THREE.MeshLambertMaterial({ color: 0xdd2222 }));
-        lb.position.set(-100+ox, 42, 560);
+        lb.position.set(PIT_X+ox, 20, PIT_Z+PIT_RZ+4);
         ptScene.add(lb);
-        const dot = new THREE.Mesh(new THREE.SphereGeometry(6, 6, 6),
+        const dot = new THREE.Mesh(new THREE.SphereGeometry(2.5, 6, 6),
             new THREE.MeshLambertMaterial({ color: 0x111111 }));
-        dot.position.set(-100+ox, 62, 557);
+        dot.position.set(PIT_X+ox, 27, PIT_Z+PIT_RZ+1);
         ptScene.add(dot);
     });
 
-    // Stump seat
-    const stump = new THREE.Mesh(new THREE.CylinderGeometry(55, 65, 70, 12),
-        new THREE.MeshLambertMaterial({ color: 0xa0632a }));
-    stump.position.set(130, 35, -50);
-    ptScene.add(stump);
-
-    // Clamp player to room bounds
+    // ── Room bounds & sinking mechanic ───────────────────────────
     ptScene.userData.roomW = ROOM_W;
     ptScene.userData.roomD = ROOM_D;
-
-    // ── Sinking mechanic ─────────────────────────────────────────
-    ptScene.userData.ballPitCenter = { x: -100, z: 400 };
-    ptScene.userData.ballPitRadius = 210;
+    ptScene.userData.ballPitCenter = { x: PIT_X, z: PIT_Z };
+    ptScene.userData.ballPitRadius = PIT_RX - 10;
     ptScene.userData.sinkY = 0;
-    ptScene.userData.sunk = false;
+    ptScene.userData.sunk  = false;
 
-    // Animate sinking & check for room 2 transfer
     ptScene.userData.onUpdate = (dt) => {
         if (ptScene.userData.sunk) return;
         const bpc = ptScene.userData.ballPitCenter;
         const bpr = ptScene.userData.ballPitRadius;
         const dx2 = pos.x - bpc.x, dz2 = pos.z - bpc.z;
-        const inPit = Math.sqrt(dx2*dx2+dz2*dz2) < bpr;
+        const inPit = (dx2*dx2)/(bpr*bpr) + (dz2*dz2)/(bpr*bpr) < 1;
         if (inPit) {
-            ptScene.userData.sinkY -= dt * 60; // sink speed
+            ptScene.userData.sinkY -= dt * 55;
             pos.y = ptScene.userData.sinkY;
-            if (pos.y < -160) {
-                // Fell in — go to Room 2
+            if (pos.y < -140) {
                 ptScene.userData.sunk = true;
                 enterPTRoom(2);
             }
         } else {
-            ptScene.userData.sinkY = Math.min(0, ptScene.userData.sinkY + dt * 80); // float back up
+            ptScene.userData.sinkY = Math.min(0, ptScene.userData.sinkY + dt * 80);
             pos.y = ptScene.userData.sinkY;
         }
     };
@@ -4240,8 +4291,8 @@ function checkPTPortals() {
     const prompt = document.getElementById('portal-prompt');
 
     if (ptRoom === 1) {
-        // Clamp to room
-        const ROOM_W = 1200, ROOM_D = 1200;
+        prompt.style.display = 'none';
+        const ROOM_W = 550, ROOM_D = 500;
         pos.x = Math.max(-ROOM_W/2+40, Math.min(ROOM_W/2-40, pos.x));
         pos.z = Math.max(-ROOM_D/2+40, Math.min(ROOM_D/2-40, pos.z));
 
