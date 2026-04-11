@@ -450,8 +450,6 @@ function listenForServerRestart() {
         const restartTime = snap.val();
         // Ignore signals that were set before we joined (stale restarts)
         if (typeof restartTime !== 'number' || restartTime <= _joinTime) return;
-        // Admin clears the flag so rejoining clients don't get kicked again
-        if (isAdmin) db.ref('cd_server/restart').remove();
         setTimeout(() => { if (myRef) myRef.remove(); location.reload(); }, Math.random() * 1500);
     });
 }
@@ -750,6 +748,8 @@ function enterGrasslands() {
         if (snap.exists()) {
             applyTerrain(snap.val());
             electEnemyHost('grasslands');
+        } else {
+            generateGrasslands(true);
         }
     });
 
@@ -805,8 +805,8 @@ function buildGrassScene() {
 }
 
 // ── Terrain generation ──────────────────────────────────────
-function generateGrasslands() {
-    if (myName !== 'bartelsfamily5') return;
+function generateGrasslands(force) {
+    if (!force && myName !== 'bartelsfamily5') return;
     const rng = seededRand(Date.now() % 9999);
 
     const segs = TERRAIN_SEGS;
@@ -1780,6 +1780,8 @@ function enterGhostTown() {
         if (snap.exists()) {
             applyGTData(snap.val());
             electEnemyHost('ghosttown');
+        } else {
+            generateGhostTown(true);
         }
     });
     // Live weather sync
@@ -1956,8 +1958,8 @@ function mInfluenceAt(h, dist) {
 }
 
 // ── Generation ────────────────────────────────────────────────────────
-function generateGhostTown() {
-    if (myName !== 'bartelsfamily5') return;
+function generateGhostTown(force) {
+    if (!force && myName !== 'bartelsfamily5') return;
     const rng = seededRand(Date.now() % 9999);
 
     // Clear old
@@ -2979,7 +2981,7 @@ function enterMoon() {
     // Load saved terrain
     db.ref('cd_moon').once('value', snap => {
         if (snap.exists()) applyMoonData(snap.val());
-        else { pos.x = 0; pos.z = 0; }
+        else generateMoon(true);
     });
 
     // Mimic sync
@@ -3044,8 +3046,8 @@ function getMoonTerrainY(wx, wz) {
 }
 
 // ── Generation ────────────────────────────────────────────────────
-function generateMoon() {
-    if (myName !== 'bartelsfamily5') return;
+function generateMoon(force) {
+    if (!force && myName !== 'bartelsfamily5') return;
     const rng = seededRand(Date.now() % 9999);
     const segs = MOON_TERRAIN_SEGS;
     const heights = [];
